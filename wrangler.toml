@@ -1,0 +1,22 @@
+name = "66qn-api"
+main = "backend/src/index.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+API_URL = "https://api.66qn.workers.dev"
+FRONTEND_URL = "https://66qn.com"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "66qn-db"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# Optional: KV for rate limiting
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT"
+# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Optional: R2 for image storage
+# [[r2_buckets]]
+# binding = "BUCKET"
+# bucket_name = "66qn-images"
