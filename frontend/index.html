@@ -148,6 +148,9 @@
         .footer-content { display: flex; justify-content: space-between; align-items: center; font-size: 0.875rem; color: var(--color-text-tertiary); }
         .footer-links { display: flex; gap: var(--space-6); }
         .footer-links a:hover { color: var(--color-text); }
+        .footer-notice { text-align: center; font-size: 0.8125rem; color: var(--color-text-tertiary); margin-bottom: var(--space-4); }
+        .footer-agree-link { color: var(--color-accent); font-weight: 500; }
+        .footer-agree-link:hover { text-decoration: underline; }
         .announcement-bar { position: relative; z-index: 90; padding: 0.65rem 1rem; text-align: center; background: #eff6ff; color: #1d4ed8; border-bottom: 1px solid #bfdbfe; font-size: 0.875rem; animation: riseIn .35s ease both; }
         .announcement-bar a { margin-left: .75rem; text-decoration: underline; font-weight: 600; }
 
@@ -477,6 +480,7 @@
 <!-- Footer -->
 <footer class="footer">
     <div class="container">
+        <p class="footer-notice">你继续使用本网站即代表你同意 <a href="#/agreement" class="footer-agree-link">免责协议</a></p>
         <div class="footer-content">
             <span>66qn 玩家社区 · 非官方站点，与 Mojang / Microsoft 无关联</span>
             <div class="footer-links">
@@ -510,8 +514,8 @@
 
 <!-- Supabase SDK + 配置 + 应用逻辑 -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="config.js?v=20261011"></script>
-<script src="app.js?v=20261011"></script>
+<script src="config.js?v=20261011b"></script>
+<script src="app.js?v=20261011b"></script>
 
 </body>
 </html>
