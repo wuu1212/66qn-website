@@ -18,24 +18,44 @@ const APP = {
     isAdmin: false,
     pages: {},
     async init() {
-        await this.loadSession();
         this.setupRouter();
         this.updateNavbar();
-        sb && sb.auth.onAuthStateChange((_e, session) => {
-            if (session && !APP.user) this.loadSession().then(() => APP.route());
-            if (!session && APP.user) { APP.user = null; APP.isAdmin = false; this.updateNavbar(); this.route(); }
+        if (!sb) return;
+        // OAuth 回调可能先返回 code，再由 SDK 换取 session；必须在首次路由前处理。
+        const callbackError = new URLSearchParams(location.search).get('error_description');
+        if (callbackError) {
+            history.replaceState({}, document.title, location.pathname);
+            setTimeout(() => toast('GitHub 登录失败：' + callbackError, 'error'), 0);
+        }
+        await this.loadSession();
+        sb.auth.onAuthStateChange(async (event, session) => {
+            if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
+                if (session) {
+                    await this.loadProfile(session.user.id);
+                    if (location.hash === '#/login' || location.hash === '#/register' || !location.hash) location.hash = '#/';
+                    else this.route();
+                }
+            } else if (event === 'SIGNED_OUT') {
+                this.user = null; this.isAdmin = false; this.updateNavbar(); this.route();
+            }
         });
     },
     async loadSession() {
         if (!sb) { this.route(); return; }
-        const { data: { session } } = await sb.auth.getSession();
+        const { data: { session }, error } = await sb.auth.getSession();
+        if (error) { toast('登录会话读取失败，请刷新重试', 'error'); }
         if (session) await this.loadProfile(session.user.id);
         this.route();
     },
     async loadProfile(uid) {
         let { data } = await sb.from('profiles').select('*').eq('id', uid).maybeSingle();
         if (!data) {
-            const uname = (sb.auth.user()?.email || 'player_' + uid.slice(0, 6)).split('@')[0];
+            // 兼容尚未运行触发器的项目：从当前 Auth 用户创建最小 profile。
+            const { data: authData } = await sb.auth.getUser();
+            const authUser = authData && authData.user;
+            const rawName = authUser && authUser.user_metadata && (authUser.user_metadata.user_name || authUser.user_metadata.preferred_username);
+            const emailName = authUser && authUser.email ? authUser.email.split('@')[0] : '';
+            const uname = String(rawName || emailName || ('player_' + uid.slice(0, 6))).replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '').slice(0, 20) || ('player_' + uid.slice(0, 6));
             const r = await sb.from('profiles').insert({ id: uid, username: uname }).select().maybeSingle();
             data = r.data;
         }
@@ -724,11 +744,19 @@ async function doLogin() {
 }
 
 async function githubLogin() {
+    if (!sb) return toast('Supabase 尚未配置', 'error');
+    // redirectTo 必须是 Supabase URL Configuration 中允许的地址；不要把 hash 放进回调 URL。
+    const redirectUrl = new URL(location.href);
+    redirectUrl.search = '';
+    redirectUrl.hash = '';
     const { error } = await sb.auth.signInWithOAuth({
         provider: 'github',
-        options: { redirectTo: location.origin + location.pathname + '#/' }
+        options: { redirectTo: redirectUrl.toString(), skipBrowserRedirect: false }
     });
-    if (error) toast(errText(error, 'GitHub 登录未启用：请在 Supabase 控制台 → 认证 → 第三方登录 中配置 GitHub'), 'error');
+    if (error) {
+        console.error('GitHub OAuth:', error.message);
+        toast(errText(error, 'GitHub 登录失败：请检查 Supabase 的 GitHub 配置和回调地址'), 'error');
+    }
 }
 
 async function doLogout() {
