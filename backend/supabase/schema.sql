@@ -518,6 +518,26 @@ create policy "mods_read"  on public.mods for select using (enabled = true or pu
 create policy "mods_admin" on public.mods for all using (public.is_admin()) with check (public.is_admin());
 
 -- ============================================================
+-- 20. 成员名单（前台展示，并与服务器在线玩家对比显示状态）
+-- ============================================================
+create table if not exists public.members (
+  id           uuid primary key default gen_random_uuid(),
+  name         text not null,                        -- 游戏 ID（用于与在线玩家比对）
+  display_name text not null default '',             -- 展示名，留空则显示游戏 ID
+  role         text not null default '成员',          -- 服主 / 管理 / 成员 …
+  description  text not null default '',
+  avatar_url   text not null default '',
+  sort_order   integer not null default 0,
+  enabled      boolean not null default true,
+  created_at   timestamptz not null default now()
+);
+alter table public.members enable row level security;
+drop policy if exists "members_read"  on public.members;
+drop policy if exists "members_admin" on public.members;
+create policy "members_read"  on public.members for select using (enabled = true or public.is_admin());
+create policy "members_admin" on public.members for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
 -- 完成。部署清单：
 -- 1) 先在 Supabase 执行本文件全部 SQL
 -- 2) 写入 AI 加密口令（把随机串换成你自己的），见文件末尾示例
