@@ -341,7 +341,8 @@ create policy "agreements_own" on public.agreements for all
 -- ============================================================
 -- 14. AI 密钥加密存储（任何人无法通过接口读取，仅服务端可解密）
 -- ============================================================
-create extension if not exists pgcrypto;
+-- Supabase 的扩展默认装在 extensions 模式下，因此下面统一用 extensions. 前缀调用
+create extension if not exists pgcrypto with schema extensions;
 
 create table if not exists public.ai_secrets (
   config_id     uuid primary key references public.ai_configs(id) on delete cascade,
@@ -363,7 +364,7 @@ returns void language plpgsql security definer set search_path = public as $$
 begin
   if not public.is_admin() then raise exception 'not authorized'; end if;
   insert into public.ai_secrets (config_id, encrypted_key)
-  values (p_config, encode(pgp_sym_encrypt(p_key, coalesce(current_setting('app.ai_secret', true), '66qn-default-secret-change-me')), 'base64'))
+  values (p_config, encode(extensions.pgp_sym_encrypt(p_key, coalesce(current_setting('app.ai_secret', true), '66qn-default-secret-change-me')), 'base64'))
   on conflict (config_id) do update set encrypted_key = excluded.encrypted_key, updated_at = now();
 end $$;
 grant execute on function public.admin_set_ai_key(uuid, text) to authenticated;
@@ -371,7 +372,7 @@ grant execute on function public.admin_set_ai_key(uuid, text) to authenticated;
 -- 仅供服务端（service_role）解密使用
 create or replace function public.get_ai_key(p_config uuid, p_secret text)
 returns text language sql security definer set search_path = public as $$
-  select pgp_sym_decrypt(decode(encrypted_key, 'base64'), p_secret)
+  select extensions.pgp_sym_decrypt(decode(encrypted_key, 'base64'), p_secret)
   from public.ai_secrets where config_id = p_config;
 $$;
 revoke all on function public.get_ai_key(uuid, text) from public;
