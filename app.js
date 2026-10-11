@@ -19,6 +19,7 @@ const APP = {
     pages: {},
     async init() {
         this.setupRouter();
+        refreshAnnouncement();
         this.updateNavbar();
         if (!sb) return;
         // OAuth 回调可能先返回 code，再由 SDK 换取 session；必须在首次路由前处理。
@@ -128,6 +129,18 @@ const APP = {
         }
     }
 };
+
+// ==================== 公告 ====================
+async function refreshAnnouncement() {
+    const bar = document.getElementById('announcement-bar');
+    if (!bar || !sb) return;
+    const { data } = await sb.from('server_settings').select('value').eq('key', 'site').maybeSingle();
+    const site = data && data.value || {};
+    if (site.announcement && site.announcement_enabled !== false) {
+        bar.innerHTML = `<strong>公告</strong> ${esc(site.announcement)}${site.announcement_url ? `<a href="${esc(site.announcement_url)}" target="_blank" rel="noopener">查看详情</a>` : ''}`;
+        bar.style.display = 'block';
+    } else bar.style.display = 'none';
+}
 
 // ==================== 工具函数 ====================
 function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
@@ -294,6 +307,7 @@ async function renderHome(app) {
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
                     <div><div class="link-card-name">B站主页</div><div class="link-card-desc">服务器视频和动态</div></div>
                 </a>
+                ${site.landmarks ? `<a href="${esc(site.landmarks)}" target="_blank" rel="noopener" class="link-card"><div><div class="link-card-name">服务器地标</div><div class="link-card-desc">查看世界地标总览</div></div></a>` : ''}
             </div>
         </section>
     </div>`;
@@ -723,8 +737,8 @@ function renderLogin(app) {
         <p class="auth-subtitle">欢迎回到 66qn 服务器</p>
         <button class="github-btn" onclick="githubLogin()">${icons.github} 使用 GitHub 登录</button>
         <div class="auth-divider">或</div>
-        <div class="form-group"><label class="form-label">邮箱</label>
-            <input class="input" id="login-email" type="email" placeholder="your@email.com"></div>
+        <div class="form-group"><label class="form-label">邮箱或用户名</label>
+            <input class="input" id="login-email" type="text" placeholder="邮箱（当前支持邮箱登录）"></div>
         <div class="form-group"><label class="form-label">密码</label>
             <input class="input" id="login-password" type="password" placeholder="输入密码"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doLogin()">登录</button>
@@ -733,9 +747,16 @@ function renderLogin(app) {
 }
 
 async function doLogin() {
-    const email = document.getElementById('login-email').value.trim();
+    const identifier = document.getElementById('login-email').value.trim();
     const password = document.getElementById('login-password').value;
-    if (!email || !password) return toast('请填写邮箱和密码', 'error');
+    if (!identifier || !password) return toast('请填写邮箱或用户名，以及密码', 'error');
+    let email = identifier;
+    if (!identifier.includes('@')) {
+        const { data: profile } = await sb.from('profiles').select('email, status').eq('username', identifier).maybeSingle();
+        if (!profile || !profile.email) return toast('找不到该用户名，请使用注册邮箱登录', 'error');
+        if (profile.status === 'banned') return toast('该账户已被撤销注册资格', 'error');
+        email = profile.email;
+    }
     const { error } = await sb.auth.signInWithPassword({ email, password });
     if (error) return toast('邮箱或密码错误', 'error');
     await APP.loadProfile((await sb.auth.getUser()).data.user.id);
@@ -777,7 +798,11 @@ function renderRegister(app) {
         <div class="form-group"><label class="form-label">用户名 <span class="text-tertiary">(3-20字符)</span></label>
             <input class="input" id="reg-username" placeholder="你的用户名" maxlength="20"></div>
         <div class="form-group"><label class="form-label">邮箱</label>
-            <input class="input" id="reg-email" type="email" placeholder="your@email.com"></div>
+            <input class="input" id="reg-email" type="email" placeholder="用于登录和验证"></div>
+        <div class="form-group"><label class="form-label">游戏 ID</label>
+            <input class="input" id="reg-game-id" placeholder="你的 Minecraft 游戏 ID" maxlength="32"></div>
+        <div class="form-group"><label class="form-label">注册原因</label>
+            <textarea class="textarea" id="reg-reason" rows="3" maxlength="500" placeholder="简单介绍你为什么想加入 66qn"></textarea></div>
         <div class="form-group"><label class="form-label">密码 <span class="text-tertiary">(至少6位)</span></label>
             <input class="input" id="reg-password" type="password" placeholder="设置密码"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doRegister()">注册</button>
@@ -788,12 +813,16 @@ function renderRegister(app) {
 async function doRegister() {
     const username = document.getElementById('reg-username').value.trim();
     const email = document.getElementById('reg-email').value.trim();
+    const gameId = document.getElementById('reg-game-id').value.trim();
+    const registerReason = document.getElementById('reg-reason').value.trim();
     const password = document.getElementById('reg-password').value;
     if (username.length < 3 || username.length > 20) return toast('用户名需3-20个字符', 'error');
     if (!email.includes('@')) return toast('请输入有效的邮箱地址', 'error');
+    if (gameId.length < 2) return toast('请填写游戏 ID', 'error');
+    if (registerReason.length < 5) return toast('请填写注册原因（至少5个字符）', 'error');
     if (password.length < 6) return toast('密码至少6位', 'error');
 
-    const { data, error } = await sb.auth.signUp({ email, password, options: { data: { username } } });
+    const { data, error } = await sb.auth.signUp({ email, password, options: { data: { username, game_id: gameId, register_reason: registerReason } } });
     if (error) return toast(errText(error, '注册失败'), 'error');
     if (data.session) {
         await APP.loadProfile(data.user.id);
@@ -912,15 +941,16 @@ async function renderAdminUsers(el) {
         <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">用户管理</h2>
         <div class="card" style="padding:0;overflow:hidden">
             <table class="data-table">
-                <thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead>
+                <thead><tr><th>用户名 / 游戏 ID</th><th>注册原因</th><th>角色</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead>
                 <tbody>${(users || []).map(u => `
                     <tr>
-                        <td><div class="flex-center" style="gap:8px">${avatarHtml(u, 24)}<a href="#/profile/${u.id}" style="color:var(--color-text)">${esc(u.username)}</a></div></td>
+                        <td><div class="flex-center" style="gap:8px">${avatarHtml(u, 24)}<div><a href="#/profile/${u.id}" style="color:var(--color-text)">${esc(u.username)}</a><div class="text-tertiary">${esc(u.game_id || '未填写')}</div></div></div></td>
+                        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.register_reason || '未填写')}</td>
                         <td><span class="badge ${u.role === 'admin' ? 'badge-blue' : 'badge-gray'}">${u.role}</span></td>
                         <td><span class="badge ${u.status === 'active' ? 'badge-green' : 'badge-red'}">${u.status === 'active' ? '正常' : '已封禁'}</span></td>
                         <td class="text-tertiary">${timeAgo(u.created_at)}</td>
                         <td>${u.id !== APP.user.id ? `
-                            <button class="btn btn-ghost btn-sm" onclick="adminToggleBan('${u.id}','${u.status}')">${u.status === 'active' ? '封禁' : '解封'}</button>
+                            <button class="btn btn-ghost btn-sm" onclick="adminToggleBan('${u.id}','${u.status}')">${u.status === 'active' ? '撤销资格' : '恢复资格'}</button>
                             <button class="btn btn-ghost btn-sm" onclick="adminSetRole('${u.id}','${u.role === 'admin' ? 'user' : 'admin'}')">${u.role === 'admin' ? '取消管理' : '设为管理'}</button>` : '<span class="text-tertiary">本人</span>'}
                         </td>
                     </tr>`).join('')}</tbody>
