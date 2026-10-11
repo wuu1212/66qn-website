@@ -348,6 +348,13 @@ create extension if not exists pgcrypto with schema extensions;
 alter table public.ai_configs add column if not exists priority integer not null default 10;
 alter table public.ai_configs add column if not exists temperature numeric not null default 0.3;
 
+-- 加密口令存放表（故意不建 select 策略：前端无法读取；只在 SQL 编辑器里写入）
+create table if not exists public.app_secrets (
+  key   text primary key,
+  value text not null
+);
+alter table public.app_secrets enable row level security;
+
 create table if not exists public.ai_secrets (
   config_id     uuid primary key references public.ai_configs(id) on delete cascade,
   encrypted_key text not null,
@@ -362,13 +369,16 @@ create policy "ai_secrets_insert" on public.ai_secrets for insert to authenticat
 create policy "ai_secrets_update" on public.ai_secrets for update to authenticated using (public.is_admin()) with check (public.is_admin());
 create policy "ai_secrets_delete" on public.ai_secrets for delete to authenticated using (public.is_admin());
 
--- 写入密钥（前端调用；内部使用 pgcrypto 对称加密）
+-- 写入密钥（前端调用；口令取自 app_secrets，内部用 pgcrypto 对称加密）
 create or replace function public.admin_set_ai_key(p_config uuid, p_key text)
 returns void language plpgsql security definer set search_path = public as $$
+declare s text;
 begin
   if not public.is_admin() then raise exception 'not authorized'; end if;
+  select value into s from public.app_secrets where key = 'ai_secret';
+  if s is null then s := '66qn-default-secret-change-me'; end if;
   insert into public.ai_secrets (config_id, encrypted_key)
-  values (p_config, encode(extensions.pgp_sym_encrypt(p_key, coalesce(current_setting('app.ai_secret', true), '66qn-default-secret-change-me')), 'base64'))
+  values (p_config, encode(extensions.pgp_sym_encrypt(p_key, s), 'base64'))
   on conflict (config_id) do update set encrypted_key = excluded.encrypted_key, updated_at = now();
 end $$;
 grant execute on function public.admin_set_ai_key(uuid, text) to authenticated;
@@ -505,10 +515,12 @@ create policy "mods_admin" on public.mods for all using (public.is_admin()) with
 -- ============================================================
 -- 完成。部署清单：
 -- 1) 先在 Supabase 执行本文件全部 SQL
--- 2) 执行下面这行，为 AI 密钥加密设置口令（务必改成你自己的随机串，然后重新连接）
+-- 2) 写入 AI 加密口令（把随机串换成你自己的），见文件末尾示例
 -- 3) 注册第一个账号后，把下面 admin 那行的邮箱换成你的，再运行一次
--- 4) 部署 Edge Function：backend/supabase/functions/ai/index.ts（见 README）
+-- 4) 部署 Edge Function：backend/supabase/functions/ai/index.ts，并在其 Secrets 里
+--    设置 AI_SECRET = 与第 2 步完全相同的字符串
 -- ============================================================
--- alter database postgres set app.ai_secret = '请替换为你的随机长字符串';
+-- insert into public.app_secrets (key, value) values ('ai_secret', '请替换为你的随机长字符串')
+--   on conflict (key) do update set value = excluded.value;
 -- update public.profiles set role = 'admin'
 --   where id = (select id from auth.users where email = '你的邮箱@example.com');
