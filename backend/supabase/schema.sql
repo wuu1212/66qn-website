@@ -344,6 +344,10 @@ create policy "agreements_own" on public.agreements for all
 -- Supabase 的扩展默认装在 extensions 模式下，因此下面统一用 extensions. 前缀调用
 create extension if not exists pgcrypto with schema extensions;
 
+-- 先补齐 ai_configs 的列（必须在下面的函数之前，否则函数体校验会报列不存在）
+alter table public.ai_configs add column if not exists priority integer not null default 10;
+alter table public.ai_configs add column if not exists temperature numeric not null default 0.3;
+
 create table if not exists public.ai_secrets (
   config_id     uuid primary key references public.ai_configs(id) on delete cascade,
   encrypted_key text not null,
@@ -396,10 +400,8 @@ revoke all on function public.get_ai_configs(text) from authenticated;
 
 -- ============================================================
 -- 15. AI 审核结果落库（帖子/评论/举报）
+--    （priority / temperature 两列已在第 14 节开头补齐）
 -- ============================================================
-alter table public.ai_configs add column if not exists priority integer not null default 10;
-alter table public.ai_configs add column if not exists temperature numeric not null default 0.3;
-
 create table if not exists public.ai_reviews (
   id          uuid primary key default gen_random_uuid(),
   target_type text not null,           -- post | comment | report
