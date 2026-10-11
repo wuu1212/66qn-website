@@ -148,6 +148,8 @@
         .footer-content { display: flex; justify-content: space-between; align-items: center; font-size: 0.875rem; color: var(--color-text-tertiary); }
         .footer-links { display: flex; gap: var(--space-6); }
         .footer-links a:hover { color: var(--color-text); }
+        .announcement-bar { position: relative; z-index: 90; padding: 0.65rem 1rem; text-align: center; background: #eff6ff; color: #1d4ed8; border-bottom: 1px solid #bfdbfe; font-size: 0.875rem; animation: riseIn .35s ease both; }
+        .announcement-bar a { margin-left: .75rem; text-decoration: underline; font-weight: 600; }
 
         /* ==================== Page: Home ==================== */
         .hero {
@@ -415,6 +417,7 @@
     </div>
 </nav>
 <div class="mobile-nav" id="mobile-nav"></div>
+<div id="announcement-bar" class="announcement-bar" style="display:none"></div>
 
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
