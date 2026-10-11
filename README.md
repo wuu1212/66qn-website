@@ -1,124 +1,84 @@
 # 66qn Minecraft 服务器官网
 
-66qn 是一个纯净原版生存 Minecraft 服务器的官方网站，包含社区论坛、私信系统、启动器下载等功能。
-
-## 技术栈
-
-| 层级 | 技术 | 说明 |
-|------|------|------|
-| 前端 | Cloudflare Pages | 纯静态 HTML/CSS/JS SPA |
-| 后端 | Cloudflare Workers | 无服务器 API |
-| 数据库 | Cloudflare D1 | SQLite 兼容 |
-| 认证 | JWT + GitHub OAuth | 双登录方式 |
+纯免费方案：**GitHub Pages（前端）+ Supabase（登录 + 数据库）**。
+不需要任何服务器、不需要阿里云。
 
 ## 项目结构
 
 ```
 66qn-website/
 ├── frontend/
-│   └── index.html          # SPA 前端（单文件）
-├── backend/
-│   ├── src/
-│   │   ├── index.js        # Worker API 入口
-│   │   └── db/
-│   │       ├── schema.sql  # 数据库建表
-│   │       └── seed.sql    # 初始数据
-│   └── package.json
-└── wrangler.toml           # Cloudflare 配置
+│   ├── index.html      # 页面骨架 + 全部样式（极简设计）
+│   ├── app.js          # 全部功能逻辑（直连 Supabase）
+│   └── config.js       # ★ 唯一需要修改的文件：填 Supabase 地址和 anon 密钥
+└── backend/supabase/
+    └── schema.sql      # 数据库建表脚本（在 Supabase SQL 编辑器里运行一次）
 ```
 
-## 功能特性
+## 功能
 
-- **首页**：服务器状态展示、玩法特色、友情链接（QQ群 + B站）
-- **启动器下载**：HMCL / FCL / PCL 官方下载跳转 + 免责声明
-- **社区论坛**：发帖、评论、点赞、举报
-- **私信系统**：用户间聊天，支持撤回（2分钟内）、举报、复制
-- **用户认证**：邮箱注册登录 + GitHub OAuth 一键登录
-- **管理后台**：仪表盘、用户/帖子/评论/举报管理、服务器设置
-- **极简设计**：黑白为主 + 蓝色强调色，注重排版和留白
+- 首页：服务器状态（后台可填 IP/端口/版本/人数）、玩法特色、友情链接（QQ群 + B站）
+- 启动器下载：HMCL / FCL / PCL，仅跳转官方页面，含免责声明
+- 社区论坛：发帖 / 评论 / 回复 / 点赞 / 举报 / 删除（本人或管理员）
+- 私信：发送、复制、举报；**仅发送者本人、2 分钟内可撤回**（数据库层强制）
+- 登录注册：邮箱 + GitHub 一键登录（Supabase Auth）
+- 管理后台：仪表盘、用户封禁/角色、帖子隐藏/置顶、评论删除、举报处理、服务器设置
+- 安全：全部权限由数据库行级安全（RLS）强制，前端只使用 anon 公钥
 
-## 快速开始
+## 部署（共 4 步）
 
-### 环境要求
+### 第 1 步：Supabase 建表
 
-- Node.js 18+
-- Wrangler CLI (`npm install -g wrangler`)
-- Cloudflare 账号
+1. 打开 https://supabase.com/dashboard → 进入你的项目
+2. 左侧点 **SQL 编辑器**
+3. 把 `backend/supabase/schema.sql` 全文粘贴进去 → **运行**
 
-### 本地开发
+### 第 2 步：开启 GitHub 登录
+
+1. 打开 https://github.com/settings/developers → New OAuth App
+   - Homepage URL: `https://66qnmc.top`
+   - Authorization callback URL: 填 Supabase「认证 → 第三方登录」页面里显示的 Redirect URL
+2. 创建后复制 **Client ID**，点 Generate client secret 得到 **Client Secret**
+3. 回到 Supabase：左侧 **认证 → 第三方登录（Sign In / OAuth）** → 启用 GitHub →
+   粘贴 Client ID / Secret → 保存
+
+### 第 3 步：填写配置文件
+
+编辑 `frontend/config.js`：
+
+```js
+window.APP_CONFIG = {
+  SUPABASE_URL: 'https://iywntwllhjbubmhtacdp.supabase.co',
+  SUPABASE_ANON_KEY: '从 Supabase 项目设置 → API 复制的 anon public 密钥',
+};
+```
+
+> anon 密钥是设计为公开的（配合 RLS 安全）；**绝不要**把 service_role 密钥放进前端或仓库。
+
+### 第 4 步：上传 GitHub 并开启 Pages
+
+1. 把整个项目推到 GitHub 仓库
+2. 仓库 Settings → Pages → Source 选对应分支和 `/frontend` 目录 → Save
+3. （可选）Custom domain 填 `66qnmc.top`，并按提示去域名控制台加一条 CNAME
+4. 等几分钟后访问 `https://66qnmc.top`
+
+## 设置管理员
+
+1. 先在网站上用邮箱注册一个账号
+2. 到 Supabase SQL 编辑器运行（把邮箱换成你的）：
+
+```sql
+update public.profiles set role = 'admin'
+where id = (select id from auth.users where email = '你的邮箱@example.com');
+```
+
+3. 刷新网站，右上角出现「管理」入口
+
+## 本地预览（可选）
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/wuu1212/66qn-website.git
-cd 66qn-website
-
-# 2. 安装后端依赖
-cd backend && npm install && cd ..
-
-# 3. 创建 D1 数据库
-wrangler d1 create 66qn-db
-
-# 4. 更新 wrangler.toml 中的 database_id
-
-# 5. 初始化数据库
-wrangler d1 execute 66qn-db --file=./backend/src/db/schema.sql
-wrangler d1 execute 66qn-db --file=./backend/src/db/seed.sql
-
-# 6. 配置 Secrets
-wrangler secret put JWT_SECRET
-wrangler secret put GITHUB_CLIENT_ID    # 可选
-wrangler secret put GITHUB_CLIENT_SECRET # 可选
-
-# 7. 本地启动后端
-cd backend && npx wrangler dev
-
-# 8. 另开终端，启动前端预览
-cd frontend && npx serve .
+cd frontend
+npx serve .
 ```
 
-### 部署
-
-```bash
-# 部署后端 API
-cd backend && npx wrangler deploy
-
-# 前端通过 GitHub 连接 Cloudflare Pages 自动部署
-# 构建输出目录设为: frontend
-```
-
-## API 端点
-
-<details>
-<summary>认证 (7个端点)</summary>
-
-- `POST /api/auth/register` - 注册
-- `POST /api/auth/login` - 登录
-- `GET /api/auth/github` - GitHub OAuth 跳转
-- `GET /api/auth/github/callback` - GitHub 回调
-- `GET /api/auth/me` - 获取当前用户
-- `POST /api/auth/logout` - 登出
-- `POST /api/auth/refresh` - 刷新 Token
-
-</details>
-
-<details>
-<summary>帖子 & 评论 & 私信 & 管理后台</summary>
-
-完整 API 文档请参考 `AI_DEPLOY_GUIDE.md`
-
-</details>
-
-## 友情链接
-
-- **QQ群**：[66qn 官方群](https://qm.qq.com/q/bZNAGK8Rs4)
-- **B站**：[66qn B站主页](https://space.bilibili.com/3546783978359356)
-
-## 默认管理员
-
-- 用户名：`admin`
-- 密码：`admin123`
-- **部署后请立即修改密码！**
-
-## License
-
-MIT
+浏览器打开 http://localhost:3000 （不要直接双击 index.html）。
