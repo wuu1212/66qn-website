@@ -44,13 +44,17 @@
 2. 左侧点 **SQL 编辑器** → New query
 3. 把 `backend/supabase/schema.sql` 全文粘贴 → **Run**
 
-### 第 2 步：设置 AI 密钥加密口令（仅用 AI 功能时需要）
+### 第 2 步：写入 AI 密钥加密口令（仅用 AI 功能时需要）
 
 在 SQL 编辑器执行一次（把口令换成你自己的随机长字符串）：
 
 ```sql
-alter database postgres set app.ai_secret = '请替换为你的随机长字符串';
+insert into public.app_secrets (key, value)
+values ('ai_secret', '请替换为你的随机长字符串')
+on conflict (key) do update set value = excluded.value;
 ```
+
+> 该表没有 select 策略，前端无法读取；口令只用于加密 AI API Key。
 
 ### 第 3 步：开启 GitHub 登录
 
