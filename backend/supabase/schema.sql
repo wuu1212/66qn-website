@@ -183,6 +183,18 @@ alter table public.game_records enable row level security;
 alter table public.ai_configs enable row level security;
 
 -- 新增内容表：公开内容可读，管理员可维护；报名和实录由登录用户提交
+-- （先 drop 再 create，保证本文件可以反复运行不报错）
+drop policy if exists "features_read" on public.game_features;
+drop policy if exists "features_admin" on public.game_features;
+drop policy if exists "commands_read" on public.server_commands;
+drop policy if exists "commands_admin" on public.server_commands;
+drop policy if exists "events_read" on public.events;
+drop policy if exists "events_admin" on public.events;
+drop policy if exists "event_signups_own" on public.event_signups;
+drop policy if exists "records_read" on public.game_records;
+drop policy if exists "records_insert" on public.game_records;
+drop policy if exists "records_admin" on public.game_records;
+drop policy if exists "ai_admin" on public.ai_configs;
 create policy "features_read" on public.game_features for select using (enabled = true or public.is_admin());
 create policy "features_admin" on public.game_features for all using (public.is_admin()) with check (public.is_admin());
 create policy "commands_read" on public.server_commands for select using (enabled = true or public.is_admin());
