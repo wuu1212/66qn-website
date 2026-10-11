@@ -7,7 +7,8 @@
 //
 // 安全：API Key 加密存放在 public.ai_secrets，仅本函数（service_role）可解密，
 //       浏览器永远拿不到密钥。
-// 部署：Supabase 控制台 → Edge Functions → 新建函数 ai → 粘贴本文件 → Deploy
+// 部署：Supabase 控制台 → Edge Functions → 新建函数（名称需与前端 app.js 里的 AI_FN 常量一致，
+//       当前为 bright-service）→ 粘贴本文件 → Deploy
 //       并在 Edge Function 的 Secrets 中设置 AI_SECRET，
 //       其值必须与数据库 public.app_secrets 表中 key='ai_secret' 的值完全一致
 // ============================================================

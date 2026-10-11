@@ -290,6 +290,8 @@ async function uploadImage(blob, prefix = 'img') {
 }
 
 // ==================== AI 客服悬浮窗 ====================
+// Supabase Edge Function 名称（若你部署时用了别的名字，改这里即可）
+const AI_FN = 'bright-service';
 const AI_CHAT = { history: [], busy: false };
 function toggleAiPanel() {
     const p = document.getElementById('ai-panel');
@@ -319,7 +321,7 @@ async function askAi() {
     const thinking = body.lastElementChild;
     try {
         if (!sb) throw new Error('服务未配置');
-        const { data, error } = await sb.functions.invoke('ai', { body: { action: 'chat', message, history: AI_CHAT.history.slice(0, -1) } });
+        const { data, error } = await sb.functions.invoke(AI_FN, { body: { action: 'chat', message, history: AI_CHAT.history.slice(0, -1) } });
         thinking.remove();
         if (error) throw new Error(error.message || 'AI 服务暂不可用');
         if (data?.error) throw new Error(data.error);
@@ -948,7 +950,7 @@ async function submitReport(type, id) {
     toast('举报已提交，AI 正在复核');
     // 交由 AI 复核，判定应删除时自动删除
     try {
-        const { data: rv } = await sb.functions.invoke('ai', { body: { action: 'review_report', report_id: data.id } });
+        const { data: rv } = await sb.functions.invoke(AI_FN, { body: { action: 'review_report', report_id: data.id } });
         if (rv && rv.autoDeleted) toast('AI 已判定违规并自动删除相关内容', 'success');
     } catch { /* AI 未配置时静默 */ }
 }
@@ -998,7 +1000,7 @@ async function submitPost() {
 // 调用 AI 审核（失败或未配置时返回 null，不阻断发布）
 async function aiModerate(targetType, content) {
     try {
-        const { data, error } = await sb.functions.invoke('ai', { body: { action: 'moderate', target_type: targetType, content } });
+        const { data, error } = await sb.functions.invoke(AI_FN, { body: { action: 'moderate', target_type: targetType, content } });
         if (error || !data || data.error) return null;
         return data;
     } catch { return null; }
@@ -1827,7 +1829,7 @@ async function deleteAiConfig(id) {
 }
 async function testAiConfig(id) {
     toast('正在测试…');
-    const { data, error } = await sb.functions.invoke('ai', { body: { action: 'chat', message: '你好，请回复“测试成功”' } });
+    const { data, error } = await sb.functions.invoke(AI_FN, { body: { action: 'chat', message: '你好，请回复“测试成功”' } });
     if (error || data?.error) return toast('测试失败：' + (error?.message || data?.error), 'error');
     toast('测试成功：' + String(data.reply || '').slice(0, 40));
 }
