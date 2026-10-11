@@ -461,53 +461,73 @@ const Settings = {
 
 // ==================== 页面：首页 ====================
 // ==================== 服务器实时状态（通过 MOTD 接口）====================
-// 返回：{online,max,version,motd} 成功 | {offline:true} 服务器离线 | {error:'noaddr'|'unreachable'} 失败
-async function fetchServerStatus(ip, port) {
-    const raw = String(ip || '').trim();
-    if (!raw || raw === '待填写') return { error: 'noaddr' };
-
-    let host = raw.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+// 返回：{online,max,version,motd} 在线 | {offline:true,tried} 两个接口都判定离线
+//      | {error:'noaddr'|'unreachable', tried} 失败
+function buildAddress(ip, port) {
+    let host = String(ip || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
     let p = String(port || '').trim();
     const m = host.match(/^(.*):(\d+)$/);      // 地址里自带端口时优先用地址里的
     if (m) { host = m[1]; p = m[2]; }
     if (!p) p = '25565';
-    const address = host + ':' + p;
+    return host + ':' + p;
+}
 
-    // 主接口：mcsrvstat.us
+// 单次探测；网络异常返回 null，接口明确回复返回 {online:boolean,...}
+async function probeMcSrvStat(address) {
     try {
         const r = await fetch('https://api.mcsrvstat.us/3/' + encodeURIComponent(address), { cache: 'no-store' });
-        if (r.ok) {
-            const d = await r.json();
-            if (d && d.online) {
-                return {
-                    online: d.players?.online ?? 0,
-                    max: d.players?.max ?? null,
-                    version: d.version || '',
-                    motd: Array.isArray(d.motd?.clean) ? d.motd.clean.join(' ') : '',
-                };
-            }
-            if (d && d.online === false) return { offline: true };
+        if (!r.ok) return null;
+        const d = await r.json();
+        if (!d) return null;
+        if (d.online) {
+            return {
+                online: true,
+                online_count: d.players?.online ?? 0,
+                max: d.players?.max ?? null,
+                version: d.version || '',
+                motd: Array.isArray(d.motd?.clean) ? d.motd.clean.join(' ') : '',
+            };
         }
-    } catch { /* 继续尝试备用接口 */ }
+        return { online: false };
+    } catch { return null; }
+}
 
-    // 备用接口：mcstatus.io
+async function probeMcStatusIo(address) {
     try {
-        const r2 = await fetch('https://api.mcstatus.io/v2/status/java/' + encodeURIComponent(address), { cache: 'no-store' });
-        if (r2.ok) {
-            const d2 = await r2.json();
-            if (d2 && d2.online) {
-                return {
-                    online: d2.players?.online ?? 0,
-                    max: d2.players?.max ?? null,
-                    version: (d2.version && (d2.version.name_clean || d2.version.name)) || '',
-                    motd: (d2.motd && (d2.motd.clean || d2.motd.raw)) || '',
-                };
-            }
-            if (d2 && d2.online === false) return { offline: true };
+        const r = await fetch('https://api.mcstatus.io/v2/status/java/' + encodeURIComponent(address), { cache: 'no-store' });
+        if (!r.ok) return null;
+        const d = await r.json();
+        if (!d) return null;
+        if (d.online) {
+            return {
+                online: true,
+                online_count: d.players?.online ?? 0,
+                max: d.players?.max ?? null,
+                version: (d.version && (d.version.name_clean || d.version.name)) || '',
+                motd: (d.motd && (d.motd.clean || d.motd.raw)) || '',
+            };
         }
-    } catch { /* 都失败 */ }
+        return { online: false };
+    } catch { return null; }
+}
 
-    return { error: 'unreachable' };
+async function fetchServerStatus(ip, port) {
+    const raw = String(ip || '').trim();
+    if (!raw || raw === '待填写') return { error: 'noaddr' };
+    const address = buildAddress(raw, port);
+
+    // 两个接口并行探测，谁先成功用谁
+    const results = await Promise.all([probeMcSrvStat(address), probeMcStatusIo(address)]);
+
+    const online = results.find(r => r && r.online);
+    if (online) {
+        return { online: online.online_count, max: online.max, version: online.version, motd: online.motd, tried: address };
+    }
+    // 只要有一个接口网络异常，就不轻易判定离线（可能是探测服务本身不可达）
+    if (results.some(r => r === null)) return { error: 'unreachable', tried: address };
+    // 两个接口都明确说离线
+    if (results.some(r => r && r.online === false)) return { offline: true, tried: address };
+    return { error: 'unreachable', tried: address };
 }
 
 async function renderHome(app) {
@@ -560,8 +580,8 @@ async function renderHome(app) {
                 ${live && live.error === 'noaddr'
                     ? '管理员还没有在后台填写服务器地址，当前显示的是默认值'
                     : (live && live.offline
-                        ? '服务器当前处于离线状态'
-                        : '实时状态获取失败，当前显示的是后台手动填写的数值')}
+                        ? `探测地址 ${esc(live.tried || '')} 未响应（部分服务器会屏蔽海外探测，玩家仍可能正常进入）`
+                        : `实时状态获取失败，当前显示的是后台手动填写的数值${live && live.tried ? '（探测地址 ' + esc(live.tried) + '）' : ''}`)}
             </p>`}
         </section>
         <section class="section">
