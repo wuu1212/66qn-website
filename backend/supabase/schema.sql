@@ -347,6 +347,10 @@ create extension if not exists pgcrypto with schema extensions;
 -- 先补齐 ai_configs 的列（必须在下面的函数之前，否则函数体校验会报列不存在）
 alter table public.ai_configs add column if not exists priority integer not null default 10;
 alter table public.ai_configs add column if not exists temperature numeric not null default 0.3;
+-- 各场景独立提示词：prompt = 客服；下面三个分别是帖子审核 / 评论审核 / 举报复核
+alter table public.ai_configs add column if not exists prompt_post text not null default '';
+alter table public.ai_configs add column if not exists prompt_comment text not null default '';
+alter table public.ai_configs add column if not exists prompt_report text not null default '';
 
 -- 加密口令存放表（故意不建 select 策略：前端无法读取；只在 SQL 编辑器里写入）
 create table if not exists public.app_secrets (
@@ -399,6 +403,7 @@ returns jsonb language sql security definer set search_path = public as $$
   select coalesce(jsonb_agg(jsonb_build_object(
     'id', c.id, 'name', c.name, 'api_url', c.api_url, 'model', c.model,
     'prompt', c.prompt, 'standard_answers', c.standard_answers,
+    'prompt_post', c.prompt_post, 'prompt_comment', c.prompt_comment, 'prompt_report', c.prompt_report,
     'scopes', c.scopes, 'priority', c.priority, 'temperature', c.temperature,
     'api_key', public.get_ai_key(c.id, p_secret)
   ) order by c.priority asc), '[]'::jsonb)
