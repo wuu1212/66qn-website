@@ -92,6 +92,9 @@ const APP = {
         switch (route) {
             case '/': renderHome(app); break;
             case '/launcher': renderLauncher(app); break;
+            case '/commands': renderPublicList(app, 'server_commands', '服务器指令', ['command','description','permission']); break;
+            case '/events': renderPublicList(app, 'events', '服务器活动', ['name','description','starts_at','ends_at']); break;
+            case '/records': renderPublicList(app, 'game_records', '游戏实录', ['player_name','coordinates','image_url','status']); break;
             case '/forum':
                 if (params[0] === 'new') renderForumNew(app);
                 else if (params[0]) renderForumDetail(app, params[0]);
@@ -318,6 +321,13 @@ async function copyAddress() {
     const s = info.server || {};
     const addr = (s.ip || '') + ':' + (s.port || '25565');
     navigator.clipboard.writeText(addr).then(() => toast('地址已复制到剪贴板'));
+}
+
+async function renderPublicList(app, table, title, fields) {
+    app.innerHTML = `<div class="container" style="max-width:900px;padding:var(--space-12) var(--space-6)"><h1 class="section-title">${title}</h1><div class="card" id="public-list">${loadingBlock()}</div></div>`;
+    const {data,error}=await sb.from(table).select('*').order('created_at',{ascending:false});
+    const box=document.getElementById('public-list'); if(error){box.innerHTML=`<p class="text-secondary">暂时无法加载内容</p>`;return;}
+    box.innerHTML=(data||[]).filter(x=>x.enabled!==false && (table!=='game_records'||x.status==='approved')).map(x=>`<article style="padding:1rem 0;border-bottom:1px solid var(--color-border-light)"><h3>${esc(x.name||x.command||x.player_name||'实录')}</h3><p class="text-secondary">${esc(x.description||x.coordinates||'')}</p>${x.permission?`<span class="badge badge-gray">权限：${esc(x.permission)}</span>`:''}${x.image_url?`<a href="${esc(x.image_url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">查看图片</a>`:''}</article>`).join('')||'<p class="text-secondary">暂无内容</p>';
 }
 
 // ==================== 页面：启动器 ====================
@@ -892,6 +902,12 @@ async function renderAdmin(app, sub) {
         { key: 'posts', label: '帖子管理', icon: icons.message },
         { key: 'comments', label: '评论管理', icon: icons.message },
         { key: 'reports', label: '举报管理', icon: icons.flag },
+        { key: 'announcement', label: '公告管理', icon: icons.flag },
+        { key: 'features', label: '玩法特色', icon: icons.cube },
+        { key: 'commands', label: '服务器指令', icon: icons.settings },
+        { key: 'events', label: '活动管理', icon: icons.users },
+        { key: 'records', label: '游戏实录', icon: icons.download },
+        { key: 'ai', label: 'AI 配置', icon: icons.shield },
         { key: 'server', label: '服务器设置', icon: icons.settings },
     ];
     app.innerHTML = `
@@ -907,6 +923,12 @@ async function renderAdmin(app, sub) {
         case 'posts': renderAdminPosts(content); break;
         case 'comments': renderAdminComments(content); break;
         case 'reports': renderAdminReports(content); break;
+        case 'announcement': renderAdminAnnouncement(content); break;
+        case 'features': renderAdminSimple(content, 'game_features', '玩法特色', ['title','description','sort_order','enabled']); break;
+        case 'commands': renderAdminSimple(content, 'server_commands', '服务器指令', ['command','description','permission','enabled']); break;
+        case 'events': renderAdminEvents(content); break;
+        case 'records': renderAdminSimple(content, 'game_records', '游戏实录', ['player_name','coordinates','image_url','status']); break;
+        case 'ai': renderAdminSimple(content, 'ai_configs', 'AI 配置', ['name','api_url','model','prompt','enabled']); break;
         case 'server': renderAdminServer(content); break;
         default: renderAdminDashboard(content);
     }
@@ -1055,6 +1077,30 @@ async function resolveReport(rid, status) {
     toast('举报已处理');
     renderAdminReports(document.getElementById('admin-content'));
 }
+
+async function renderAdminAnnouncement(el) {
+    const { data } = await sb.from('server_settings').select('value').eq('key','site').maybeSingle();
+    const s = data?.value || {};
+    el.innerHTML = `<h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">公告管理</h2><div class="card">
+      <div class="form-group"><label class="form-label">公告内容</label><textarea class="textarea" id="ann-text" rows="4">${esc(s.announcement || '')}</textarea></div>
+      <div class="form-group"><label class="form-label">详情链接（可选）</label><input class="input" id="ann-url" value="${esc(s.announcement_url || '')}"></div>
+      <label class="flex-center gap-4"><input id="ann-enabled" type="checkbox" ${s.announcement_enabled !== false ? 'checked' : ''}> 启用公告</label>
+      <button class="btn btn-primary" style="margin-top:1rem" onclick="saveAnnouncement()">保存公告</button></div>`;
+}
+async function saveAnnouncement() {
+    const { data } = await sb.from('server_settings').select('value').eq('key','site').maybeSingle();
+    const value = {...(data?.value || {}), announcement: document.getElementById('ann-text').value.trim(), announcement_url: document.getElementById('ann-url').value.trim(), announcement_enabled: document.getElementById('ann-enabled').checked};
+    const { error } = await sb.from('server_settings').upsert({key:'site', value, updated_at:new Date().toISOString()});
+    if (error) return toast(errText(error, '公告保存失败'), 'error'); Settings.cache = null; refreshAnnouncement(); toast('公告已保存');
+}
+async function renderAdminSimple(el, table, title, fields) {
+    const { data, error } = await sb.from(table).select('*').order('created_at',{ascending:false});
+    if (error) return el.innerHTML = `<div class="card">${esc(errText(error,'读取失败'))}</div>`;
+    el.innerHTML = `<h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">${title}</h2><div class="card"><div class="grid-2">${fields.filter(f=>f!=='enabled').map(f=>`<div class="form-group"><label class="form-label">${f}</label><input class="input" id="new-${f}" placeholder="${f}"></div>`).join('')}</div><button class="btn btn-primary" onclick="adminAddSimple('${table}',${JSON.stringify(fields)})">新增</button></div><div class="card" style="margin-top:1rem;padding:0;overflow:auto"><table class="data-table"><thead><tr>${fields.map(f=>`<th>${f}</th>`).join('')}<th>操作</th></tr></thead><tbody>${(data||[]).map(row=>`<tr>${fields.map(f=>`<td>${esc(Array.isArray(row[f])?row[f].join(','):row[f] ?? '')}</td>`).join('')}<td><button class="btn btn-ghost btn-sm" onclick="adminDeleteSimple('${table}','${row.id}')">删除</button></td></tr>`).join('')}</tbody></table></div>`;
+}
+async function adminAddSimple(table, fields) { const value={}; fields.filter(f=>f!=='enabled').forEach(f=>value[f]=document.getElementById('new-'+f)?.value.trim()||''); if(fields.includes('sort_order')) value.sort_order=parseInt(value.sort_order)||0; if(fields.includes('enabled')) value.enabled=true; const {error}=await sb.from(table).insert(value); if(error)return toast(errText(error,'新增失败'),'error'); toast('已新增'); renderAdminSimple(document.getElementById('admin-content'),table,table,fields); }
+async function adminDeleteSimple(table,id) { if(!confirm('确定删除？'))return; const {error}=await sb.from(table).delete().eq('id',id); if(error)return toast(errText(error,'删除失败'),'error'); toast('已删除'); APP.route(); }
+async function renderAdminEvents(el) { return renderAdminSimple(el,'events','活动管理',['name','description','starts_at','ends_at','signup_enabled','enabled']); }
 
 async function renderAdminServer(el) {
     const info = await Settings.load(true);
