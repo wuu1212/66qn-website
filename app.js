@@ -461,23 +461,53 @@ const Settings = {
 
 // ==================== 页面：首页 ====================
 // ==================== 服务器实时状态（通过 MOTD 接口）====================
+// 返回：{online,max,version,motd} 成功 | {offline:true} 服务器离线 | {error:'noaddr'|'unreachable'} 失败
 async function fetchServerStatus(ip, port) {
-    const host = String(ip || '').replace(/^https?:\/\//, '').replace(/:\d+$/, '').trim();
-    if (!host || host === '待填写') return null;
-    const address = host + ':' + (port || '25565');
+    const raw = String(ip || '').trim();
+    if (!raw || raw === '待填写') return { error: 'noaddr' };
+
+    let host = raw.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    let p = String(port || '').trim();
+    const m = host.match(/^(.*):(\d+)$/);      // 地址里自带端口时优先用地址里的
+    if (m) { host = m[1]; p = m[2]; }
+    if (!p) p = '25565';
+    const address = host + ':' + p;
+
+    // 主接口：mcsrvstat.us
     try {
-        const res = await fetch('https://api.mcsrvstat.us/3/' + encodeURIComponent(address));
-        if (!res.ok) return null;
-        const d = await res.json();
-        if (!d || !d.online) return null;
-        const motd = Array.isArray(d.motd?.clean) ? d.motd.clean.join(' ') : '';
-        return {
-            online: d.players?.online ?? 0,
-            max: d.players?.max ?? null,
-            version: d.version || '',
-            motd,
-        };
-    } catch { return null; }
+        const r = await fetch('https://api.mcsrvstat.us/3/' + encodeURIComponent(address), { cache: 'no-store' });
+        if (r.ok) {
+            const d = await r.json();
+            if (d && d.online) {
+                return {
+                    online: d.players?.online ?? 0,
+                    max: d.players?.max ?? null,
+                    version: d.version || '',
+                    motd: Array.isArray(d.motd?.clean) ? d.motd.clean.join(' ') : '',
+                };
+            }
+            if (d && d.online === false) return { offline: true };
+        }
+    } catch { /* 继续尝试备用接口 */ }
+
+    // 备用接口：mcstatus.io
+    try {
+        const r2 = await fetch('https://api.mcstatus.io/v2/status/java/' + encodeURIComponent(address), { cache: 'no-store' });
+        if (r2.ok) {
+            const d2 = await r2.json();
+            if (d2 && d2.online) {
+                return {
+                    online: d2.players?.online ?? 0,
+                    max: d2.players?.max ?? null,
+                    version: (d2.version && (d2.version.name_clean || d2.version.name)) || '',
+                    motd: (d2.motd && (d2.motd.clean || d2.motd.raw)) || '',
+                };
+            }
+            if (d2 && d2.online === false) return { offline: true };
+        }
+    } catch { /* 都失败 */ }
+
+    return { error: 'unreachable' };
 }
 
 async function renderHome(app) {
@@ -486,6 +516,7 @@ async function renderHome(app) {
     const s = info.server || {};
     const site = info.site || {};
     const live = await fetchServerStatus(s.ip, s.port);
+    const liveOk = !!(live && !live.error && !live.offline);
 
     // 玩法特色：优先取后台配置，未配置时使用默认四项
     const { data: feats } = await sb.from('game_features').select('*').eq('enabled', true).order('sort_order', { ascending: true }).limit(12);
@@ -512,18 +543,26 @@ async function renderHome(app) {
         <section class="section" style="padding-top:0">
             <div class="status-cards">
                 <div class="card status-card">
-                    <div class="status-card-value">${esc((live && live.version) || s.version || '—')}</div>
-                    <div class="status-card-label">游戏版本${live ? '（实时）' : ''}</div>
+                    <div class="status-card-value">${esc(liveOk ? (live.version || '—') : (live && live.offline ? '离线' : (s.version || '—')))}</div>
+                    <div class="status-card-label">游戏版本${liveOk ? '（实时）' : ''}</div>
                 </div>
                 <div class="card status-card">
-                    <div class="status-card-value">${live ? `${live.online}/${live.max ?? esc(s.maxPlayers || 20)}` : `${(s.players != null ? s.players : 0)}/${esc(s.maxPlayers || 20)}`}</div>
-                    <div class="status-card-label">在线人数${live ? '（实时）' : ''}</div>
+                    <div class="status-card-value">${liveOk ? `${live.online}/${live.max ?? esc(s.maxPlayers || 20)}` : (live && live.offline ? '服务器离线' : `${(s.players != null ? s.players : 0)}/${esc(s.maxPlayers || 20)}`)}</div>
+                    <div class="status-card-label">在线人数${liveOk ? '（实时）' : ''}</div>
                 </div>
                 <div class="card status-card">
                     <div class="status-card-value" style="font-size:1rem;word-break:break-all">${esc(s.ip || '待填写')}:${esc(s.port || '25565')}</div>
                     <div class="status-card-label">服务器地址</div>
                 </div>
             </div>
+            ${liveOk ? (live.motd ? `<p class="text-tertiary text-center" style="margin-top:var(--space-3)">${esc(live.motd)}</p>` : '') : `
+            <p class="text-tertiary text-center" style="margin-top:var(--space-3)">
+                ${live && live.error === 'noaddr'
+                    ? '管理员还没有在后台填写服务器地址，当前显示的是默认值'
+                    : (live && live.offline
+                        ? '服务器当前处于离线状态'
+                        : '实时状态获取失败，当前显示的是后台手动填写的数值')}
+            </p>`}
         </section>
         <section class="section">
             <h2 class="section-title text-center">玩法特色</h2>
