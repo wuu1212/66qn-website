@@ -1926,6 +1926,7 @@ async function renderAdminAi(el) {
                         <td>${c.priority}</td>
                         <td><span class="badge ${c.enabled ? 'badge-green' : 'badge-gray'}">${c.enabled ? '启用' : '停用'}</span></td>
                         <td>
+                            <button class="btn btn-ghost btn-sm" onclick="editAiConfig('${c.id}')">编辑</button>
                             <button class="btn btn-ghost btn-sm" onclick="testAiConfig('${c.id}')">测试</button>
                             <button class="btn btn-ghost btn-sm" onclick="toggleAiConfig('${c.id}',${c.enabled ? 'false' : 'true'})">${c.enabled ? '停用' : '启用'}</button>
                             <button class="btn btn-ghost btn-sm" onclick="deleteAiConfig('${c.id}')">删除</button>
@@ -1964,6 +1965,60 @@ async function saveAiConfig() {
 async function toggleAiConfig(id, enabled) {
     await sb.from('ai_configs').update({ enabled }).eq('id', id);
     toast('已更新'); renderAdminAi(document.getElementById('admin-content'));
+}
+
+// 编辑已有模型配置
+async function editAiConfig(id) {
+    const { data: c } = await sb.from('ai_configs').select('*').eq('id', id).maybeSingle();
+    if (!c) return;
+    const scopes = Array.isArray(c.scopes) ? c.scopes : String(c.scopes || '').replace(/[{}]/g, '').split(',').map(s => s.trim()).filter(Boolean);
+    showModal('编辑模型配置', `
+        <div class="grid-2">
+            <div class="form-group"><label class="form-label">配置名称</label><input class="input" id="ea-name" value="${esc(c.name || '')}"></div>
+            <div class="form-group"><label class="form-label">优先级（数字越小越优先）</label><input class="input" id="ea-priority" type="number" value="${c.priority ?? 10}"></div>
+        </div>
+        <div class="form-group"><label class="form-label">API 地址</label><input class="input" id="ea-url" value="${esc(c.api_url || '')}"></div>
+        <div class="grid-2">
+            <div class="form-group"><label class="form-label">模型名称</label><input class="input" id="ea-model" value="${esc(c.model || '')}"></div>
+            <div class="form-group"><label class="form-label">温度</label><input class="input" id="ea-temp" type="number" step="0.1" value="${c.temperature ?? 0.3}"></div>
+        </div>
+        <div class="form-group"><label class="form-label">API Key <span class="text-tertiary">(留空表示不修改)</span></label><input class="input" id="ea-key" type="password" placeholder="不填则保持原密钥不变"></div>
+        <div class="form-group"><label class="form-label">提示词</label><textarea class="textarea" id="ea-prompt" rows="3">${esc(c.prompt || '')}</textarea></div>
+        <div class="form-group"><label class="form-label">标准回答（每行一条：关键词1,关键词2 => 回答）</label>
+            <textarea class="textarea" id="ea-std" rows="3">${esc(formatStandardAnswers(c.standard_answers))}</textarea></div>
+        <div class="form-group"><label class="form-label">负责板块</label>
+            <div class="flex" style="gap:1rem;flex-wrap:wrap">${AI_SCOPES.map(s => `<label class="flex-center" style="gap:.35rem"><input type="checkbox" class="ai-scope-ed" value="${s.key}" ${scopes.includes(s.key) ? 'checked' : ''}> ${s.label}</label>`).join('')}</div></div>
+        <label class="flex-center" style="gap:.35rem"><input type="checkbox" id="ea-enabled" ${c.enabled ? 'checked' : ''}> 启用</label>`,
+        `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+         <button class="btn btn-primary" onclick="updateAiConfig('${id}')">保存修改</button>`);
+}
+
+async function updateAiConfig(id) {
+    const scopes = Array.from(document.querySelectorAll('.ai-scope-ed:checked')).map(x => x.value);
+    const payload = {
+        name: document.getElementById('ea-name').value.trim(),
+        api_url: document.getElementById('ea-url').value.trim(),
+        model: document.getElementById('ea-model').value.trim(),
+        prompt: document.getElementById('ea-prompt').value.trim(),
+        standard_answers: parseStandardAnswers(document.getElementById('ea-std').value),
+        scopes,
+        priority: parseInt(document.getElementById('ea-priority').value) || 10,
+        temperature: Number(document.getElementById('ea-temp').value) || 0.3,
+        enabled: document.getElementById('ea-enabled').checked,
+    };
+    if (!payload.name) return toast('请填写配置名称', 'error');
+    if (!payload.api_url) return toast('请填写 API 地址', 'error');
+    if (!scopes.length) return toast('请至少选择一个负责板块', 'error');
+    const { error } = await sb.from('ai_configs').update(payload).eq('id', id);
+    if (error) return toast(errText(error, '保存失败'), 'error');
+    const key = document.getElementById('ea-key').value.trim();
+    if (key) {
+        const { error: kerr } = await sb.rpc('admin_set_ai_key', { p_config: id, p_key: key });
+        if (kerr) return toast('配置已保存，但密钥更新失败：' + kerr.message, 'error');
+    }
+    document.querySelector('.modal-overlay')?.remove();
+    toast('已保存修改');
+    renderAdminAi(document.getElementById('admin-content'));
 }
 async function deleteAiConfig(id) {
     if (!confirm('确定删除该 AI 配置？')) return;
