@@ -481,6 +481,18 @@ async function renderHome(app) {
     const site = info.site || {};
     const live = await fetchServerStatus(s.ip, s.port);
 
+    // 玩法特色：优先取后台配置，未配置时使用默认四项
+    const { data: feats } = await sb.from('game_features').select('*').eq('enabled', true).order('sort_order', { ascending: true }).limit(12);
+    const iconPool = [icons.cube, icons.heart, icons.shield, icons.users];
+    const featureCards = (feats && feats.length)
+        ? feats.map((f, i) => ({ icon: iconPool[i % iconPool.length], title: f.title, desc: f.description || '' }))
+        : [
+            { icon: icons.cube, title: '纯净原版', desc: '不添加任何模组和插件，保留 Minecraft 最原汁原味的生存体验。' },
+            { icon: icons.heart, title: '友善社区', desc: '玩家之间互帮互助，共同打造一个温暖的游戏社区。' },
+            { icon: icons.shield, title: '长期稳定', desc: '服务器 7x24 小时运行，数据定期备份，永不删档。' },
+            { icon: icons.users, title: '自由建造', desc: '广阔的世界等你探索，建造属于你的梦想家园。' },
+        ];
+
     app.innerHTML = `
     <div class="container">
         <section class="hero">
@@ -510,10 +522,7 @@ async function renderHome(app) {
         <section class="section">
             <h2 class="section-title text-center">玩法特色</h2>
             <div class="grid-4">
-                <div class="card feature-card"><div class="feature-icon">${icons.cube}</div><h3>纯净原版</h3><p>不添加任何模组和插件，保留 Minecraft 最原汁原味的生存体验。</p></div>
-                <div class="card feature-card"><div class="feature-icon">${icons.heart}</div><h3>友善社区</h3><p>玩家之间互帮互助，共同打造一个温暖的游戏社区。</p></div>
-                <div class="card feature-card"><div class="feature-icon">${icons.shield}</div><h3>长期稳定</h3><p>服务器 7x24 小时运行，数据定期备份，永不删档。</p></div>
-                <div class="card feature-card"><div class="feature-icon">${icons.users}</div><h3>自由建造</h3><p>广阔的世界等你探索，建造属于你的梦想家园。</p></div>
+                ${featureCards.map(f => `<div class="card feature-card"><div class="feature-icon">${f.icon}</div><h3>${esc(f.title)}</h3><p>${esc(f.desc)}</p></div>`).join('')}
             </div>
         </section>
         <section class="section">
@@ -1335,8 +1344,8 @@ async function renderAdmin(app, sub) {
         case 'comments': renderAdminComments(content); break;
         case 'reports': renderAdminReports(content); break;
         case 'announcement': renderAdminAnnouncement(content); break;
-        case 'features': renderAdminSimple(content, 'game_features', '玩法特色', ['title','description','sort_order','enabled']); break;
-        case 'commands': renderAdminSimple(content, 'server_commands', '服务器指令', ['command','description','permission','enabled']); break;
+        case 'features': renderAdminTable(content, 'game_features'); break;
+        case 'commands': renderAdminTable(content, 'server_commands'); break;
         case 'mods': renderAdminMods(content); break;
         case 'events': renderAdminEvents(content); break;
         case 'records': renderAdminRecords(content); break;
@@ -1530,13 +1539,113 @@ async function saveAnnouncement() {
     const { error } = await sb.from('server_settings').upsert({key:'site', value, updated_at:new Date().toISOString()});
     if (error) return toast(errText(error, '公告保存失败'), 'error'); Settings.cache = null; refreshAnnouncement(); toast('公告已保存');
 }
-async function renderAdminSimple(el, table, title, fields) {
-    const { data, error } = await sb.from(table).select('*').order('created_at',{ascending:false});
-    if (error) return el.innerHTML = `<div class="card">${esc(errText(error,'读取失败'))}</div>`;
-    el.innerHTML = `<h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">${title}</h2><div class="card"><div class="grid-2">${fields.filter(f=>f!=='enabled').map(f=>`<div class="form-group"><label class="form-label">${f}</label><input class="input" id="new-${f}" placeholder="${f}"></div>`).join('')}</div><button class="btn btn-primary" onclick="adminAddSimple('${table}',${JSON.stringify(fields)})">新增</button></div><div class="card" style="margin-top:1rem;padding:0;overflow:auto"><table class="data-table"><thead><tr>${fields.map(f=>`<th>${f}</th>`).join('')}<th>操作</th></tr></thead><tbody>${(data||[]).map(row=>`<tr>${fields.map(f=>`<td>${esc(Array.isArray(row[f])?row[f].join(','):row[f] ?? '')}</td>`).join('')}<td><button class="btn btn-ghost btn-sm" onclick="adminDeleteSimple('${table}','${row.id}')">删除</button></td></tr>`).join('')}</tbody></table></div>`;
+// ==================== 后台：通用内容表（中文标签）====================
+const ADMIN_FIELDS = {
+    game_features: [
+        { key: 'title', label: '标题', ph: '例如 纯净原版', required: true },
+        { key: 'description', label: '说明', type: 'textarea', ph: '一句话介绍这个玩法' },
+        { key: 'sort_order', label: '排序', type: 'number', ph: '数字越小越靠前' },
+    ],
+    server_commands: [
+        { key: 'command', label: '指令', ph: '例如 /spawn', required: true },
+        { key: 'description', label: '说明', type: 'textarea', ph: '这个指令的作用' },
+        { key: 'permission', label: '权限', ph: '玩家 / VIP / 管理员' },
+    ],
+};
+const ADMIN_TITLES = { game_features: '玩法特色', server_commands: '服务器指令' };
+
+function adminFieldInput(f, prefix, value) {
+    const v = value == null ? '' : String(value);
+    if (f.type === 'textarea') {
+        return `<textarea class="textarea" id="${prefix}-${f.key}" rows="2" placeholder="${esc(f.ph || '')}">${esc(v)}</textarea>`;
+    }
+    return `<input class="input" id="${prefix}-${f.key}" type="${f.type === 'number' ? 'number' : 'text'}" value="${esc(v)}" placeholder="${esc(f.ph || '')}">`;
 }
-async function adminAddSimple(table, fields) { const value={}; fields.filter(f=>f!=='enabled').forEach(f=>value[f]=document.getElementById('new-'+f)?.value.trim()||''); if(fields.includes('sort_order')) value.sort_order=parseInt(value.sort_order)||0; if(fields.includes('enabled')) value.enabled=true; const {error}=await sb.from(table).insert(value); if(error)return toast(errText(error,'新增失败'),'error'); toast('已新增'); renderAdminSimple(document.getElementById('admin-content'),table,table,fields); }
-async function adminDeleteSimple(table,id) { if(!confirm('确定删除？'))return; const {error}=await sb.from(table).delete().eq('id',id); if(error)return toast(errText(error,'删除失败'),'error'); toast('已删除'); APP.route(); }
+
+async function renderAdminTable(el, table) {
+    const fields = ADMIN_FIELDS[table] || [];
+    const title = ADMIN_TITLES[table] || table;
+    const { data, error } = await sb.from(table).select('*').order('created_at', { ascending: false });
+    if (error) { el.innerHTML = `<div class="card">${esc(errText(error, '读取失败'))}</div>`; return; }
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">${title}</h2>
+        <div class="card mb-8">
+            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">新增${title}</h3>
+            <div class="grid-2">${fields.map(f => `
+                <div class="form-group"><label class="form-label">${f.label}${f.required ? ' <span class="text-tertiary">(必填)</span>' : ''}</label>
+                    ${adminFieldInput(f, 'new', '')}</div>`).join('')}</div>
+            <button class="btn btn-primary" onclick="adminCreateRow('${table}')">新增</button>
+        </div>
+        <div class="card" style="padding:0;overflow:auto">
+            <table class="data-table">
+                <thead><tr>${fields.map(f => `<th>${f.label}</th>`).join('')}<th>状态</th><th>操作</th></tr></thead>
+                <tbody>${(data || []).map(row => `
+                    <tr>
+                        ${fields.map(f => `<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row[f.key] == null ? '' : String(row[f.key]))}</td>`).join('')}
+                        <td><span class="badge ${row.enabled !== false ? 'badge-green' : 'badge-gray'}">${row.enabled !== false ? '启用' : '停用'}</span></td>
+                        <td>
+                            <button class="btn btn-ghost btn-sm" onclick="adminToggleRow('${table}','${row.id}',${row.enabled !== false ? 'false' : 'true'})">${row.enabled !== false ? '停用' : '启用'}</button>
+                            <button class="btn btn-ghost btn-sm" onclick="adminEditRow('${table}','${row.id}')">编辑</button>
+                            <button class="btn btn-ghost btn-sm" onclick="adminDeleteRow('${table}','${row.id}')">删除</button>
+                        </td>
+                    </tr>`).join('') || `<tr><td colspan="${fields.length + 2}" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">暂无数据，请在上方新增</td></tr>`}</tbody>
+            </table>
+        </div>`;
+}
+
+async function adminCreateRow(table) {
+    const fields = ADMIN_FIELDS[table] || [];
+    const payload = { enabled: true };
+    for (const f of fields) {
+        const raw = document.getElementById('new-' + f.key)?.value.trim() || '';
+        if (f.required && !raw) return toast('请填写「' + f.label + '」', 'error');
+        payload[f.key] = f.type === 'number' ? (parseInt(raw) || 0) : raw;
+    }
+    const { error } = await sb.from(table).insert(payload);
+    if (error) return toast(errText(error, '新增失败'), 'error');
+    toast('已新增');
+    renderAdminTable(document.getElementById('admin-content'), table);
+}
+
+async function adminEditRow(table, id) {
+    const fields = ADMIN_FIELDS[table] || [];
+    const { data: row } = await sb.from(table).select('*').eq('id', id).maybeSingle();
+    if (!row) return;
+    showModal('编辑' + (ADMIN_TITLES[table] || ''), `
+        ${fields.map(f => `<div class="form-group"><label class="form-label">${f.label}</label>${adminFieldInput(f, 'ed', row[f.key])}</div>`).join('')}`,
+        `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+         <button class="btn btn-primary" onclick="adminUpdateRow('${table}','${id}')">保存</button>`);
+}
+
+async function adminUpdateRow(table, id) {
+    const fields = ADMIN_FIELDS[table] || [];
+    const payload = {};
+    for (const f of fields) {
+        const raw = document.getElementById('ed-' + f.key)?.value.trim() || '';
+        if (f.required && !raw) return toast('请填写「' + f.label + '」', 'error');
+        payload[f.key] = f.type === 'number' ? (parseInt(raw) || 0) : raw;
+    }
+    const { error } = await sb.from(table).update(payload).eq('id', id);
+    if (error) return toast(errText(error, '保存失败'), 'error');
+    document.querySelector('.modal-overlay')?.remove();
+    toast('已保存');
+    renderAdminTable(document.getElementById('admin-content'), table);
+}
+
+async function adminToggleRow(table, id, enabled) {
+    const { error } = await sb.from(table).update({ enabled }).eq('id', id);
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    toast(enabled ? '已启用' : '已停用');
+    renderAdminTable(document.getElementById('admin-content'), table);
+}
+
+async function adminDeleteRow(table, id) {
+    if (!confirm('确定删除该条内容？')) return;
+    const { error } = await sb.from(table).delete().eq('id', id);
+    if (error) return toast(errText(error, '删除失败'), 'error');
+    toast('已删除');
+    renderAdminTable(document.getElementById('admin-content'), table);
+}
 async function renderAdminEvents(el) {
     const { data } = await sb.from('events').select('*, signups:event_signups(count)').order('created_at', { ascending: false });
     el.innerHTML = `
