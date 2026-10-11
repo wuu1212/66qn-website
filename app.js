@@ -35,11 +35,17 @@ const APP = {
             setTimeout(() => showAgreementModal(true), 700);
         }
         sb.auth.onAuthStateChange(async (event, session) => {
-            if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
+            // 注意：TOKEN_REFRESHED 会在标签页重新获得焦点时触发。
+            // 这里绝不能重新渲染当前页面，否则用户填到一半的表单会被清空。
+            if (event === 'TOKEN_REFRESHED') {
+                if (session) await this.loadProfile(session.user.id);   // 只刷新用户名/头像
+                return;
+            }
+            if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
                 if (session) {
                     await this.loadProfile(session.user.id);
-                    if (location.hash === '#/login' || location.hash === '#/register' || !location.hash) location.hash = '#/';
-                    else this.route();
+                    // 只有停在登录/注册页时才跳回首页；其它页面保持原样，不重画
+                    if (location.hash === '#/login' || location.hash === '#/register') location.hash = '#/';
                 }
             } else if (event === 'SIGNED_OUT') {
                 this.user = null; this.isAdmin = false; this.updateNavbar(); this.route();
@@ -1532,13 +1538,33 @@ async function renderAdminAnnouncement(el) {
       <div class="form-group"><label class="form-label">详情链接（可选）</label><input class="input" id="ann-url" value="${esc(s.announcement_url || '')}"></div>
       <label class="flex-center gap-4"><input id="ann-enabled" type="checkbox" ${s.announcement_enabled !== false ? 'checked' : ''}> 启用公告</label>
       <button class="btn btn-primary" style="margin-top:1rem" onclick="saveAnnouncement()">保存公告</button></div>`;
+    draftBind('announcement', ['ann-text', 'ann-url', 'ann-enabled']);
 }
 async function saveAnnouncement() {
     const { data } = await sb.from('server_settings').select('value').eq('key','site').maybeSingle();
     const value = {...(data?.value || {}), announcement: document.getElementById('ann-text').value.trim(), announcement_url: document.getElementById('ann-url').value.trim(), announcement_enabled: document.getElementById('ann-enabled').checked};
     const { error } = await sb.from('server_settings').upsert({key:'site', value, updated_at:new Date().toISOString()});
-    if (error) return toast(errText(error, '公告保存失败'), 'error'); Settings.cache = null; refreshAnnouncement(); toast('公告已保存');
+    if (error) return toast(errText(error, '公告保存失败'), 'error'); Settings.cache = null; refreshAnnouncement(); draftClear('announcement'); toast('公告已保存');
 }
+// ==================== 后台表单草稿（防止误刷新丢内容）====================
+function draftBind(key, ids) {
+    let store = {};
+    try { store = JSON.parse(localStorage.getItem('66qn_draft_' + key) || '{}'); } catch { store = {}; }
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (store[id] != null && el.type !== 'checkbox') el.value = store[id];
+        if (store[id] != null && el.type === 'checkbox') el.checked = !!store[id];
+        el.addEventListener('input', () => {
+            let s = {};
+            try { s = JSON.parse(localStorage.getItem('66qn_draft_' + key) || '{}'); } catch { s = {}; }
+            s[id] = el.type === 'checkbox' ? el.checked : el.value;
+            try { localStorage.setItem('66qn_draft_' + key, JSON.stringify(s)); } catch { /* 忽略 */ }
+        });
+    });
+}
+function draftClear(key) { localStorage.removeItem('66qn_draft_' + key); }
+
 // ==================== 后台：通用内容表（中文标签）====================
 const ADMIN_FIELDS = {
     game_features: [
@@ -1678,6 +1704,7 @@ async function renderAdminEvents(el) {
                     </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">暂无活动</td></tr>'}</tbody>
             </table>
         </div>`;
+    draftBind('event', ['ev-name', 'ev-desc', 'ev-start', 'ev-end', 'ev-signup']);
 }
 async function saveEvent() {
     const name = document.getElementById('ev-name').value.trim();
@@ -1693,6 +1720,7 @@ async function saveEvent() {
     const { error } = await sb.from('events').insert(payload);
     if (error) return toast(errText(error, '发布失败'), 'error');
     toast('活动已发布');
+    draftClear('event');
     renderAdminEvents(document.getElementById('admin-content'));
 }
 async function adminToggleEvent(id, enabled) {
@@ -1746,6 +1774,7 @@ async function renderAdminMods(el) {
                     </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">还没有模组</td></tr>'}</tbody>
             </table>
         </div>`;
+    draftBind('mod', ['mod-name', 'mod-version', 'mod-url', 'mod-desc', 'mod-sort']);
 }
 async function saveMod() {
     const payload = {
@@ -1761,6 +1790,7 @@ async function saveMod() {
     const { error } = await sb.from('mods').insert(payload);
     if (error) return toast(errText(error, '添加失败'), 'error');
     toast('模组已添加');
+    draftClear('mod');
     renderAdminMods(document.getElementById('admin-content'));
 }
 async function toggleMod(id, enabled) {
@@ -1903,6 +1933,7 @@ async function renderAdminAi(el) {
                     </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">还没有配置模型</td></tr>'}</tbody>
             </table>
         </div>`;
+    draftBind('ai', ['ai-name', 'ai-priority', 'ai-url', 'ai-model', 'ai-temp', 'ai-prompt', 'ai-std', 'ai-key', 'ai-enabled']);
 }
 async function saveAiConfig() {
     const scopes = Array.from(document.querySelectorAll('.ai-scope:checked')).map(x => x.value);
@@ -1927,6 +1958,7 @@ async function saveAiConfig() {
         if (kerr) toast('配置已保存，但密钥写入失败：' + kerr.message, 'error');
     }
     toast('AI 配置已保存');
+    draftClear('ai');
     renderAdminAi(document.getElementById('admin-content'));
 }
 async function toggleAiConfig(id, enabled) {
@@ -1957,6 +1989,7 @@ async function renderAdminAgreement(el) {
             <label class="flex-center" style="gap:.35rem;margin-bottom:1rem"><input type="checkbox" id="ag-required" ${v.agreement_required !== false ? 'checked' : ''}> 首次访问必须同意后才能使用</label>
             <button class="btn btn-primary" onclick="saveAgreement()">保存协议</button>
         </div>`;
+    draftBind('agreement', ['ag-title', 'ag-text', 'ag-required']);
 }
 async function saveAgreement() {
     const { data } = await sb.from('server_settings').select('value').eq('key', 'legal').maybeSingle();
@@ -1964,6 +1997,7 @@ async function saveAgreement() {
     const { error } = await sb.from('server_settings').upsert({ key: 'legal', value, updated_at: new Date().toISOString() });
     if (error) return toast(errText(error, '保存失败'), 'error');
     AGREEMENT_TEXT = null;
+    draftClear('agreement');
     toast('协议已保存');
 }
 
@@ -1986,6 +2020,7 @@ async function renderAdminServer(el) {
             <div class="form-group"><label class="form-label">服务器描述 (MOTD)</label><textarea class="textarea" id="si-motd" rows="3">${esc(s.motd || '')}</textarea></div>
             <button class="btn btn-primary" onclick="saveServerInfo()">保存</button>
         </div>`;
+    draftBind('server', ['si-name', 'si-ip', 'si-port', 'si-version', 'si-online', 'si-max', 'si-motd']);
 }
 
 async function saveServerInfo() {
@@ -2002,6 +2037,7 @@ async function saveServerInfo() {
     if (error) return toast(errText(error, '保存失败'), 'error');
     Settings.cache = null;
     toast('服务器信息已保存');
+    draftClear('server');
 }
 
 // ==================== 404 ====================
