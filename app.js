@@ -105,6 +105,7 @@ const APP = {
             case '/download':
             case '/launcher': renderDownload(app); break;
             case '/commands': renderCommands(app); break;
+            case '/members': renderMembers(app); break;
             case '/events': renderEvents(app, params[0]); break;
             case '/records': renderRecords(app); break;
             case '/agreement': renderAgreementPage(app); break;
@@ -202,6 +203,7 @@ function toggleMobileNav() {
     nav.innerHTML = `
         <a href="#/" class="nav-link" onclick="toggleMobileNav()">首页</a>
         <a href="#/download" class="nav-link" onclick="toggleMobileNav()">下载</a>
+        <a href="#/members" class="nav-link" onclick="toggleMobileNav()">成员</a>
         <a href="#/commands" class="nav-link" onclick="toggleMobileNav()">指令</a>
         <a href="#/events" class="nav-link" onclick="toggleMobileNav()">活动</a>
         <a href="#/records" class="nav-link" onclick="toggleMobileNav()">实录</a>
@@ -473,6 +475,7 @@ function buildAddress(ip, port) {
 }
 
 // 单次探测；网络异常返回 null，接口明确回复返回 {online:boolean,...}
+// players: 在线玩家名数组；接口未返回名单时为 null（表示"无法得知名单"）
 async function probeMcSrvStat(address) {
     try {
         const r = await fetch('https://api.mcsrvstat.us/3/' + encodeURIComponent(address), { cache: 'no-store' });
@@ -480,12 +483,16 @@ async function probeMcSrvStat(address) {
         const d = await r.json();
         if (!d) return null;
         if (d.online) {
+            const rawList = d.players?.list;
             return {
                 online: true,
                 online_count: d.players?.online ?? 0,
                 max: d.players?.max ?? null,
                 version: d.version || '',
                 motd: Array.isArray(d.motd?.clean) ? d.motd.clean.join(' ') : '',
+                players: Array.isArray(rawList)
+                    ? rawList.map(x => typeof x === 'string' ? x : (x && (x.name_clean || x.name_raw)) || '').filter(Boolean)
+                    : null,
             };
         }
         return { online: false };
@@ -499,12 +506,16 @@ async function probeMcStatusIo(address) {
         const d = await r.json();
         if (!d) return null;
         if (d.online) {
+            const rawList = d.players?.list;
             return {
                 online: true,
                 online_count: d.players?.online ?? 0,
                 max: d.players?.max ?? null,
                 version: (d.version && (d.version.name_clean || d.version.name)) || '',
                 motd: (d.motd && (d.motd.clean || d.motd.raw)) || '',
+                players: Array.isArray(rawList)
+                    ? rawList.map(x => (x && (x.name_clean || x.name_raw)) || '').filter(Boolean)
+                    : null,
             };
         }
         return { online: false };
@@ -521,7 +532,10 @@ async function fetchServerStatus(ip, port) {
 
     const online = results.find(r => r && r.online);
     if (online) {
-        return { online: online.online_count, max: online.max, version: online.version, motd: online.motd, tried: address };
+        return {
+            online: online.online_count, max: online.max, version: online.version,
+            motd: online.motd, players: online.players, tried: address,
+        };
     }
     // 只要有一个接口网络异常，就不轻易判定离线（可能是探测服务本身不可达）
     if (results.some(r => r === null)) return { error: 'unreachable', tried: address };
@@ -627,7 +641,69 @@ async function renderCommands(app) {
         </div>`).join('') || '<p class="text-secondary">管理员还没有添加指令</p>';
 }
 
-// ==================== 页面：活动 ====================
+// ==================== 页面：成员 ====================
+async function renderMembers(app) {
+    app.innerHTML = `<div class="container" style="max-width:960px;padding:var(--space-12) var(--space-6)"><h1 class="section-title">成员</h1><div id="members-body">${loadingBlock()}</div></div>`;
+    const info = await Settings.load();
+    const s = info.server || {};
+
+    const [live, memberRes] = await Promise.all([
+        fetchServerStatus(s.ip, s.port),
+        sb.from('members').select('*').eq('enabled', true).order('sort_order', { ascending: true }).order('created_at', { ascending: true }),
+    ]);
+
+    const members = memberRes.data || [];
+    const onlineNames = (live && Array.isArray(live.players)) ? live.players : null;
+    const onlineSet = new Set((onlineNames || []).map(n => String(n).trim().toLowerCase()));
+
+    const body = document.getElementById('members-body');
+    if (!members.length) {
+        body.innerHTML = '<div class="card text-secondary" style="text-align:center">管理员还没有添加成员</div>';
+        return;
+    }
+
+    // 顶部状态说明
+    let summary;
+    if (!onlineNames) {
+        summary = live && live.offline
+            ? '服务器当前离线，无法获取在线玩家名单'
+            : '暂时无法获取服务器在线玩家名单，成员状态显示为「未知」';
+    } else {
+        summary = `服务器当前在线 ${live.online}${live.max ? '/' + live.max : ''} 人`;
+    }
+
+    body.innerHTML = `
+        <p class="text-secondary mb-8" style="font-size:.875rem">${esc(summary)}</p>
+        <div class="grid-3">
+            ${members.map(m => {
+                const name = String(m.name || '').trim();
+                const label = m.display_name || name;
+                let badge = '<span class="badge badge-gray">状态未知</span>';
+                if (onlineNames) {
+                    badge = onlineSet.has(name.toLowerCase())
+                        ? '<span class="badge badge-green">服务器在线</span>'
+                        : '<span class="badge badge-gray">服务器离线</span>';
+                }
+                return `
+                <div class="card member-card">
+                    <div class="member-top">
+                        ${m.avatar_url
+                            ? `<img src="${esc(m.avatar_url)}" alt="" class="member-avatar" onerror="this.style.display='none'">`
+                            : `<div class="member-avatar member-avatar-fallback">${esc(label.slice(0, 1).toUpperCase())}</div>`}
+                        <div style="min-width:0">
+                            <div class="member-name">${esc(label)}</div>
+                            <div class="member-role">${esc(m.role || '成员')}</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:.6rem">${badge}</div>
+                    ${m.description ? `<p class="text-secondary" style="font-size:.8125rem;margin-top:.6rem">${esc(m.description)}</p>` : ''}
+                    <div class="text-tertiary" style="font-size:.75rem;margin-top:.5rem">游戏 ID：${esc(name)}</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+}
+
+
 async function renderEvents(app, eventId) {
     if (eventId) return renderEventDetail(app, eventId);
     app.innerHTML = `<div class="container" style="max-width:860px;padding:var(--space-12) var(--space-6)"><h1 class="section-title">服务器活动</h1><div class="card" id="event-list">${loadingBlock()}</div></div>`;
@@ -1388,6 +1464,7 @@ async function renderAdmin(app, sub) {
         { key: 'announcement', label: '公告管理', icon: icons.flag },
         { key: 'features', label: '玩法特色', icon: icons.cube },
         { key: 'commands', label: '服务器指令', icon: icons.settings },
+        { key: 'members', label: '成员管理', icon: icons.users },
         { key: 'mods', label: '模组管理', icon: icons.download },
         { key: 'events', label: '活动管理', icon: icons.users },
         { key: 'records', label: '游戏实录', icon: icons.download },
@@ -1411,6 +1488,7 @@ async function renderAdmin(app, sub) {
         case 'announcement': renderAdminAnnouncement(content); break;
         case 'features': renderAdminTable(content, 'game_features'); break;
         case 'commands': renderAdminTable(content, 'server_commands'); break;
+        case 'members': renderAdminTable(content, 'members'); break;
         case 'mods': renderAdminMods(content); break;
         case 'events': renderAdminEvents(content); break;
         case 'records': renderAdminRecords(content); break;
@@ -1636,8 +1714,16 @@ const ADMIN_FIELDS = {
         { key: 'description', label: '说明', type: 'textarea', ph: '这个指令的作用' },
         { key: 'permission', label: '权限', ph: '玩家 / VIP / 管理员' },
     ],
+    members: [
+        { key: 'name', label: '游戏 ID', ph: '必须与游戏内 ID 完全一致，用于判断在线状态', required: true },
+        { key: 'display_name', label: '展示名', ph: '留空则显示游戏 ID' },
+        { key: 'role', label: '称号', ph: '服主 / 管理 / 成员' },
+        { key: 'description', label: '说明', type: 'textarea', ph: '一句话介绍' },
+        { key: 'avatar_url', label: '头像链接', ph: 'https://...（留空则用首字母头像）' },
+        { key: 'sort_order', label: '排序', type: 'number', ph: '数字越小越靠前' },
+    ],
 };
-const ADMIN_TITLES = { game_features: '玩法特色', server_commands: '服务器指令' };
+const ADMIN_TITLES = { game_features: '玩法特色', server_commands: '服务器指令', members: '成员管理' };
 
 function adminFieldInput(f, prefix, value) {
     const v = value == null ? '' : String(value);
@@ -1676,6 +1762,7 @@ async function renderAdminTable(el, table) {
                     </tr>`).join('') || `<tr><td colspan="${fields.length + 2}" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">暂无数据，请在上方新增</td></tr>`}</tbody>
             </table>
         </div>`;
+    draftBind('tbl_' + table, fields.map(f => 'new-' + f.key));
 }
 
 async function adminCreateRow(table) {
@@ -1689,6 +1776,7 @@ async function adminCreateRow(table) {
     const { error } = await sb.from(table).insert(payload);
     if (error) return toast(errText(error, '新增失败'), 'error');
     toast('已新增');
+    draftClear('tbl_' + table);
     renderAdminTable(document.getElementById('admin-content'), table);
 }
 
