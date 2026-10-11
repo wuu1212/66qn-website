@@ -29,13 +29,15 @@ const APP = {
             setTimeout(() => toast('GitHub 登录失败：' + callbackError, 'error'), 0);
         }
         await this.loadSession();
-        const agreed = await checkAgreement();
-        if (!agreed) setTimeout(() => showAgreementModal(true), 700);
+        // 协议弹窗只在首次访问时出现一次，之后由页脚常驻提示
+        if (!(await checkAgreement()) && !localStorage.getItem('66qn_agreement_seen')) {
+            localStorage.setItem('66qn_agreement_seen', '1');
+            setTimeout(() => showAgreementModal(true), 700);
+        }
         sb.auth.onAuthStateChange(async (event, session) => {
             if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
                 if (session) {
                     await this.loadProfile(session.user.id);
-                    if (!(await checkAgreement())) setTimeout(() => showAgreementModal(true), 500);
                     if (location.hash === '#/login' || location.hash === '#/register' || !location.hash) location.hash = '#/';
                     else this.route();
                 }
