@@ -481,6 +481,25 @@ create policy "uploads_delete" on storage.objects for delete to authenticated
   using (bucket_id = 'uploads' and owner = auth.uid());
 
 -- ============================================================
+-- 19. 下载页 · 自有模组（管理员在后台维护名称与下载链接）
+-- ============================================================
+create table if not exists public.mods (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null,
+  description text not null default '',
+  version     text not null default '',
+  url         text not null default '',
+  sort_order  integer not null default 0,
+  enabled     boolean not null default true,
+  created_at  timestamptz not null default now()
+);
+alter table public.mods enable row level security;
+drop policy if exists "mods_read"  on public.mods;
+drop policy if exists "mods_admin" on public.mods;
+create policy "mods_read"  on public.mods for select using (enabled = true or public.is_admin());
+create policy "mods_admin" on public.mods for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
 -- 完成。部署清单：
 -- 1) 先在 Supabase 执行本文件全部 SQL
 -- 2) 执行下面这行，为 AI 密钥加密设置口令（务必改成你自己的随机串，然后重新连接）

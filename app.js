@@ -94,7 +94,8 @@ const APP = {
 
         switch (route) {
             case '/': renderHome(app); break;
-            case '/launcher': renderLauncher(app); break;
+            case '/download':
+            case '/launcher': renderDownload(app); break;
             case '/commands': renderCommands(app); break;
             case '/events': renderEvents(app, params[0]); break;
             case '/records': renderRecords(app); break;
@@ -192,7 +193,7 @@ function toggleMobileNav() {
     nav.style.display = 'block';
     nav.innerHTML = `
         <a href="#/" class="nav-link" onclick="toggleMobileNav()">首页</a>
-        <a href="#/launcher" class="nav-link" onclick="toggleMobileNav()">启动器</a>
+        <a href="#/download" class="nav-link" onclick="toggleMobileNav()">下载</a>
         <a href="#/commands" class="nav-link" onclick="toggleMobileNav()">指令</a>
         <a href="#/events" class="nav-link" onclick="toggleMobileNav()">活动</a>
         <a href="#/records" class="nav-link" onclick="toggleMobileNav()">实录</a>
@@ -483,7 +484,7 @@ async function renderHome(app) {
             <p class="hero-subtitle">${esc(site.slogan || '纯净原版生存 · 回归游戏本真')}</p>
             <div class="hero-actions">
                 <button class="btn btn-primary btn-lg" onclick="copyAddress()">复制服务器地址</button>
-                <a href="#/launcher" class="btn btn-secondary btn-lg">下载启动器</a>
+                <a href="#/download" class="btn btn-secondary btn-lg">前往下载页</a>
             </div>
         </section>
         <section class="section" style="padding-top:0">
@@ -689,12 +690,14 @@ async function submitRecord() {
     APP.route();
 }
 
-// ==================== 页面：启动器 ====================
-function renderLauncher(app) {
+// ==================== 页面：下载页（启动器 + 自有模组）====================
+async function renderDownload(app) {
     app.innerHTML = `
-    <div class="container" style="max-width:640px;margin:0 auto;padding:var(--space-16) var(--space-6)">
-        <h1 class="section-title" style="font-size:1.875rem">启动器下载</h1>
-        <p class="text-secondary mb-8">选择适合你的启动器来加入 66qn 服务器。以下链接均跳转到各启动器的官方下载页面。</p>
+    <div class="container" style="max-width:680px;margin:0 auto;padding:var(--space-16) var(--space-6)">
+        <h1 class="section-title" style="font-size:1.875rem">下载页</h1>
+        <p class="text-secondary mb-8">这里提供进入 66qn 所需的启动器，以及本站自有的整合模组。</p>
+
+        <h2 class="dl-section-title">启动器</h2>
         <div style="display:flex;flex-direction:column;gap:var(--space-4)">
             <div class="card launcher-card">
                 <div class="launcher-info">
@@ -722,7 +725,23 @@ function renderLauncher(app) {
             </div>
         </div>
         <div class="disclaimer"><strong>免责声明</strong><br>以上启动器均为第三方开发的 Minecraft 启动工具，与本站无关。上述链接仅跳转到各启动器的官方网站或 GitHub Releases 页面，本站不提供任何启动器文件的直接下载。请从官方渠道下载以确保安全。使用第三方启动器所产生的任何风险由用户自行承担。</div>
+
+        <h2 class="dl-section-title" style="margin-top:var(--space-16)">自有模组</h2>
+        <p class="text-secondary mb-4" style="font-size:.875rem">由 66qn 服务器整理或自制的模组资源，请按需下载。</p>
+        <div id="mods-list" style="display:flex;flex-direction:column;gap:var(--space-4)">${loadingBlock()}</div>
     </div>`;
+
+    const box = document.getElementById('mods-list');
+    const { data, error } = await sb.from('mods').select('*').eq('enabled', true).order('sort_order', { ascending: true }).order('created_at', { ascending: false });
+    if (error) { box.innerHTML = '<p class="text-secondary">暂时无法加载模组列表</p>'; return; }
+    box.innerHTML = (data || []).map(m => `
+        <div class="card launcher-card">
+            <div class="launcher-info">
+                <h3>${esc(m.name)} ${m.version ? `<span class="text-tertiary" style="font-weight:400">v${esc(m.version)}</span>` : ''}</h3>
+                <p>${esc(m.description || '暂无说明')}</p>
+            </div>
+            ${m.url ? `<a href="${esc(m.url)}" target="_blank" rel="noopener" class="btn btn-primary" style="flex-shrink:0">${icons.download} 下载</a>` : '<span class="badge badge-gray">暂未提供下载</span>'}
+        </div>`).join('') || '<div class="card text-secondary" style="text-align:center">管理员还没有上传模组</div>';
 }
 
 // ==================== 页面：论坛列表 ====================
@@ -1291,6 +1310,7 @@ async function renderAdmin(app, sub) {
         { key: 'announcement', label: '公告管理', icon: icons.flag },
         { key: 'features', label: '玩法特色', icon: icons.cube },
         { key: 'commands', label: '服务器指令', icon: icons.settings },
+        { key: 'mods', label: '模组管理', icon: icons.download },
         { key: 'events', label: '活动管理', icon: icons.users },
         { key: 'records', label: '游戏实录', icon: icons.download },
         { key: 'ai', label: 'AI 配置', icon: icons.shield },
@@ -1313,6 +1333,7 @@ async function renderAdmin(app, sub) {
         case 'announcement': renderAdminAnnouncement(content); break;
         case 'features': renderAdminSimple(content, 'game_features', '玩法特色', ['title','description','sort_order','enabled']); break;
         case 'commands': renderAdminSimple(content, 'server_commands', '服务器指令', ['command','description','permission','enabled']); break;
+        case 'mods': renderAdminMods(content); break;
         case 'events': renderAdminEvents(content); break;
         case 'records': renderAdminRecords(content); break;
         case 'ai': renderAdminAi(content); break;
@@ -1576,6 +1597,97 @@ async function adminDeleteEvent(id) {
     await sb.from('events').delete().eq('id', id);
     toast('已删除');
     renderAdminEvents(document.getElementById('admin-content'));
+}
+
+// ==================== 后台：自有模组管理 ====================
+async function renderAdminMods(el) {
+    const { data } = await sb.from('mods').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: false });
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">模组管理（下载页 · 自有模组）</h2>
+        <div class="card mb-8">
+            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">新增模组</h3>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">模组名称</label><input class="input" id="mod-name" placeholder="例如 66qn 整合包" maxlength="80"></div>
+                <div class="form-group"><label class="form-label">版本（可选）</label><input class="input" id="mod-version" placeholder="例如 1.0.0" maxlength="32"></div>
+            </div>
+            <div class="form-group"><label class="form-label">下载链接</label><input class="input" id="mod-url" placeholder="https://..."></div>
+            <div class="form-group"><label class="form-label">说明（可选）</label><textarea class="textarea" id="mod-desc" rows="2" maxlength="300"></textarea></div>
+            <div class="form-group"><label class="form-label">排序（数字越小越靠前）</label><input class="input" id="mod-sort" type="number" value="0"></div>
+            <button class="btn btn-primary" onclick="saveMod()">添加模组</button>
+        </div>
+        <div class="card" style="padding:0;overflow:auto">
+            <table class="data-table">
+                <thead><tr><th>名称</th><th>版本</th><th>链接</th><th>排序</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody>${(data || []).map(m => `
+                    <tr>
+                        <td>${esc(m.name)}${m.description ? `<div class="text-tertiary">${esc(m.description)}</div>` : ''}</td>
+                        <td>${esc(m.version || '-')}</td>
+                        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.url ? `<a href="${esc(m.url)}" target="_blank" rel="noopener" style="color:var(--color-accent)">${esc(m.url)}</a>` : '<span class="text-tertiary">未填写</span>'}</td>
+                        <td>${m.sort_order}</td>
+                        <td><span class="badge ${m.enabled ? 'badge-green' : 'badge-gray'}">${m.enabled ? '上架' : '下架'}</span></td>
+                        <td>
+                            <button class="btn btn-ghost btn-sm" onclick="toggleMod('${m.id}',${m.enabled ? 'false' : 'true'})">${m.enabled ? '下架' : '上架'}</button>
+                            <button class="btn btn-ghost btn-sm" onclick="editMod('${m.id}')">编辑</button>
+                            <button class="btn btn-ghost btn-sm" onclick="deleteMod('${m.id}')">删除</button>
+                        </td>
+                    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">还没有模组</td></tr>'}</tbody>
+            </table>
+        </div>`;
+}
+async function saveMod() {
+    const payload = {
+        name: document.getElementById('mod-name').value.trim(),
+        version: document.getElementById('mod-version').value.trim(),
+        url: document.getElementById('mod-url').value.trim(),
+        description: document.getElementById('mod-desc').value.trim(),
+        sort_order: parseInt(document.getElementById('mod-sort').value) || 0,
+        enabled: true,
+    };
+    if (!payload.name) return toast('请填写模组名称', 'error');
+    if (!payload.url) return toast('请填写下载链接', 'error');
+    const { error } = await sb.from('mods').insert(payload);
+    if (error) return toast(errText(error, '添加失败'), 'error');
+    toast('模组已添加');
+    renderAdminMods(document.getElementById('admin-content'));
+}
+async function toggleMod(id, enabled) {
+    await sb.from('mods').update({ enabled }).eq('id', id);
+    toast(enabled ? '已上架' : '已下架');
+    renderAdminMods(document.getElementById('admin-content'));
+}
+async function editMod(id) {
+    const { data: m } = await sb.from('mods').select('*').eq('id', id).maybeSingle();
+    if (!m) return;
+    showModal('编辑模组', `
+        <div class="form-group"><label class="form-label">模组名称</label><input class="input" id="em-name" value="${esc(m.name)}" maxlength="80"></div>
+        <div class="form-group"><label class="form-label">版本</label><input class="input" id="em-version" value="${esc(m.version || '')}" maxlength="32"></div>
+        <div class="form-group"><label class="form-label">下载链接</label><input class="input" id="em-url" value="${esc(m.url || '')}"></div>
+        <div class="form-group"><label class="form-label">说明</label><textarea class="textarea" id="em-desc" rows="2" maxlength="300">${esc(m.description || '')}</textarea></div>
+        <div class="form-group"><label class="form-label">排序</label><input class="input" id="em-sort" type="number" value="${m.sort_order}"></div>`,
+        `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+         <button class="btn btn-primary" onclick="updateMod('${m.id}')">保存</button>`);
+}
+async function updateMod(id) {
+    const payload = {
+        name: document.getElementById('em-name').value.trim(),
+        version: document.getElementById('em-version').value.trim(),
+        url: document.getElementById('em-url').value.trim(),
+        description: document.getElementById('em-desc').value.trim(),
+        sort_order: parseInt(document.getElementById('em-sort').value) || 0,
+    };
+    if (!payload.name) return toast('请填写模组名称', 'error');
+    const { error } = await sb.from('mods').update(payload).eq('id', id);
+    if (error) return toast(errText(error, '保存失败'), 'error');
+    document.querySelector('.modal-overlay')?.remove();
+    toast('已保存');
+    renderAdminMods(document.getElementById('admin-content'));
+}
+async function deleteMod(id) {
+    if (!confirm('确定删除该模组？')) return;
+    const { error } = await sb.from('mods').delete().eq('id', id);
+    if (error) return toast(errText(error, '删除失败'), 'error');
+    toast('已删除');
+    renderAdminMods(document.getElementById('admin-content'));
 }
 
 // ==================== 后台：游戏实录审核 ====================
