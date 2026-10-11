@@ -35,8 +35,46 @@ function normalizeEndpoint(url: string): string {
 
 interface AiConfig {
   id: string; name: string; api_url: string; model: string; prompt: string;
+  prompt_post?: string; prompt_comment?: string; prompt_report?: string;
   standard_answers: Array<{ keywords?: string[]; answer?: string }> | string;
   scopes: string[] | string; priority: number; temperature: number; api_key: string | null;
+}
+
+// ============================================================
+// 各场景的「输出契约」——无论管理员写了什么提示词，都会强制附加，
+// 保证模型返回可解析的固定格式，程序据此判定「打回」或「通过」。
+// ============================================================
+const CONTRACTS: Record<string, string> = {
+  post: '你是社区内容审核员。判断下面这篇帖子是否违反社区规范（色情、暴力、违法犯罪、辱骂人身攻击、广告刷屏、恶意引战、泄露他人隐私）。\n'
+    + '只输出一个 JSON 对象，不要输出任何解释、前后缀或代码块标记：\n'
+    + '{"verdict":"pass","reason":"不超过30字的原因"}\n'
+    + '{"verdict":"reject","reason":"不超过30字的原因"}\n'
+    + 'pass = 通过（正常展示）；reject = 打回（不展示）。',
+  comment: '你是社区内容审核员。判断下面这条评论是否违反社区规范（色情、暴力、违法犯罪、辱骂人身攻击、广告刷屏、恶意引战、泄露他人隐私）。\n'
+    + '只输出一个 JSON 对象，不要输出任何解释、前后缀或代码块标记：\n'
+    + '{"verdict":"pass","reason":"不超过30字的原因"}\n'
+    + '{"verdict":"reject","reason":"不超过30字的原因"}\n'
+    + 'pass = 通过（正常展示）；reject = 打回（不展示）。',
+  report: '你是社区举报复核员。根据「举报理由」与「被举报内容」，判断是否应当删除该内容。\n'
+    + '只输出一个 JSON 对象，不要输出任何解释、前后缀或代码块标记：\n'
+    + '{"verdict":"delete","reason":"不超过30字的原因"}\n'
+    + '{"verdict":"keep","reason":"不超过30字的原因"}\n'
+    + 'delete = 应当删除；keep = 保留。',
+};
+
+const DEFAULT_PERSONA: Record<string, string> = {
+  post: '你是严格但公正的社区内容审核员，只做判断，不写多余内容。',
+  comment: '你是严格但公正的社区内容审核员，只做判断，不写多余内容。',
+  report: '你是社区举报复核员，只做判断，不写多余内容。',
+};
+
+/** 取某个场景的提示词：优先用该场景专属提示词，绝不回落到客服提示词 */
+function promptFor(cfg: AiConfig, scenario: 'post' | 'comment' | 'report'): string {
+  const custom = scenario === 'post' ? cfg.prompt_post
+    : scenario === 'comment' ? cfg.prompt_comment
+    : cfg.prompt_report;
+  const persona = (custom && custom.trim()) ? custom.trim() : DEFAULT_PERSONA[scenario];
+  return persona + '\n\n' + CONTRACTS[scenario];
 }
 
 function toArray(v: unknown): string[] {
@@ -77,20 +115,23 @@ function matchStandardAnswer(cfg: AiConfig, message: string): string | null {
   return null;
 }
 
-/** 从 JSON 文本中提取判定结果 */
-function parseVerdict(raw: string): { verdict: string; reason: string } {
+/** 从模型输出中解析判定结果：pass=通过 / reject=打回 / keep=保留 */
+function parseVerdict(raw: string): { verdict: 'pass' | 'reject' | 'keep'; reason: string } {
   const m = raw.match(/\{[\s\S]*\}/);
   if (m) {
     try {
       const o = JSON.parse(m[0]);
-      const v = String(o.verdict || o.result || '').toLowerCase();
-      if (v.includes('reject') || v.includes('delete') || v.includes('违规')) return { verdict: 'reject', reason: String(o.reason || 'AI 判定违规') };
-      if (v.includes('allow') || v.includes('ok') || v.includes('通过')) return { verdict: 'allow', reason: String(o.reason || '') };
-    } catch { /* ignore */ }
+      const v = String(o.verdict ?? o.result ?? o.decision ?? '').trim().toLowerCase();
+      const reason = String(o.reason ?? o.说明 ?? '').slice(0, 100);
+      if (['reject', 'delete', 'block', 'fail', '打回', '违规', '删除'].some(k => v.includes(k))) return { verdict: 'reject', reason };
+      if (['keep', '保留', '不删除'].some(k => v.includes(k))) return { verdict: 'keep', reason };
+      if (['pass', 'allow', 'ok', 'approve', '通过'].some(k => v.includes(k))) return { verdict: 'pass', reason };
+    } catch { /* 落到下面用关键词兜底 */ }
   }
   const low = raw.toLowerCase();
-  if (low.includes('reject') || low.includes('违规')) return { verdict: 'reject', reason: raw.slice(0, 200) };
-  return { verdict: 'allow', reason: raw.slice(0, 200) };
+  if (/reject|delete|打回|违规|删除/.test(low)) return { verdict: 'reject', reason: raw.slice(0, 100) };
+  if (/keep|保留/.test(low)) return { verdict: 'keep', reason: raw.slice(0, 100) };
+  return { verdict: 'pass', reason: raw.slice(0, 100) };
 }
 
 Deno.serve(async (req: Request) => {
@@ -144,21 +185,23 @@ Deno.serve(async (req: Request) => {
     if (action === 'moderate') {
       const content = String(body.content || '').slice(0, 4000);
       const targetType = String(body.target_type || 'post');
+      const scenario: 'post' | 'comment' = targetType === 'comment' ? 'comment' : 'post';
       const targetId = body.target_id ? String(body.target_id) : null;
-      const pool = pickByScope(targetType === 'comment' ? 'comments' : 'posts');
-      if (!pool.length || !content) return json({ verdict: 'allow', skipped: true });
+      const pool = pickByScope(scenario === 'comment' ? 'comments' : 'posts');
+      if (!pool.length || !content) return json({ verdict: 'pass', skipped: true });
 
       const cfg = pool[0];
       const messages = [
-        { role: 'system', content: cfg.prompt || '你是内容审核员。判断用户内容是否违反社区规范（色情、暴力、违法、辱骂、广告刷屏）。只输出 JSON：{"verdict":"allow"或"reject","reason":"简短原因"}' },
+        { role: 'system', content: promptFor(cfg, scenario) },
         { role: 'user', content },
       ];
       const raw = await callModel(cfg, messages);
       const { verdict, reason } = parseVerdict(raw);
+      const decision = verdict === 'reject' ? 'reject' : 'pass';
       if (targetId) {
-        await admin.from('ai_reviews').insert({ target_type: targetType, target_id: targetId, verdict, reason, model: cfg.name });
+        await admin.from('ai_reviews').insert({ target_type: targetType, target_id: targetId, verdict: decision, reason, model: cfg.name });
       }
-      return json({ verdict, reason, model: cfg.name });
+      return json({ verdict: decision, reason, model: cfg.name });
     }
 
     // ---------------- 举报复核 ----------------
@@ -188,14 +231,14 @@ Deno.serve(async (req: Request) => {
 
       const cfg = pool[0];
       const messages = [
-        { role: 'system', content: cfg.prompt || '你是社区审核员。根据举报理由与被举报内容，判断是否应当删除该内容。只输出 JSON：{"verdict":"delete"或"keep","reason":"简短原因"}' },
+        { role: 'system', content: promptFor(cfg, 'report') },
         { role: 'user', content: `举报理由：${report.reason}\n\n被举报内容：\n${targetText}` },
       ];
       const raw = await callModel(cfg, messages);
       const { verdict, reason } = parseVerdict(raw);
       const shouldDelete = verdict === 'reject';
 
-      await admin.from('ai_reviews').insert({ target_type: 'report', target_id: reportId, verdict: shouldDelete ? 'reject' : 'allow', reason, model: cfg.name });
+      await admin.from('ai_reviews').insert({ target_type: 'report', target_id: reportId, verdict: shouldDelete ? 'reject' : 'pass', reason, model: cfg.name });
 
       if (shouldDelete) {
         // 服务端直接执行删除并结案

@@ -1906,7 +1906,14 @@ async function renderAdminAi(el) {
                 <div class="form-group"><label class="form-label">温度</label><input class="input" id="ai-temp" type="number" step="0.1" value="0.3"></div>
             </div>
             <div class="form-group"><label class="form-label">API Key（保存后不可查看，只能覆盖）</label><input class="input" id="ai-key" type="password" placeholder="sk-..."></div>
-            <div class="form-group"><label class="form-label">提示词</label><textarea class="textarea" id="ai-prompt" rows="3" placeholder="你是 66qn 服务器的客服助手…"></textarea></div>
+            <div class="form-group"><label class="form-label">客服提示词（AI 客服）</label><textarea class="textarea" id="ai-prompt" rows="3" placeholder="你是 66qn 服务器的客服助手，用简洁友好的中文回答玩家问题…"></textarea></div>
+            <div class="form-group"><label class="form-label">帖子审核提示词 <span class="text-tertiary">(留空则用内置默认)</span></label>
+                <textarea class="textarea" id="ai-prompt-post" rows="2" placeholder="例如：对广告和引战内容从严，正常讨论一律通过"></textarea>
+                <p class="text-tertiary" style="margin-top:.35rem;font-size:.75rem">只需写判断标准，系统会自动追加固定输出格式，返回 pass（通过）或 reject（打回）。</p></div>
+            <div class="form-group"><label class="form-label">评论审核提示词 <span class="text-tertiary">(留空则用内置默认)</span></label>
+                <textarea class="textarea" id="ai-prompt-comment" rows="2" placeholder="例如：短评、语气词一律通过，辱骂和刷屏打回"></textarea></div>
+            <div class="form-group"><label class="form-label">举报复核提示词 <span class="text-tertiary">(留空则用内置默认)</span></label>
+                <textarea class="textarea" id="ai-prompt-report" rows="2" placeholder="例如：证据不足时倾向保留，仅明显违规才删除"></textarea></div>
             <div class="form-group"><label class="form-label">标准回答（每行一条，格式：关键词1,关键词2 => 回答）</label>
                 <textarea class="textarea" id="ai-std" rows="3" placeholder="服务器地址,ip,怎么进 => 服务器地址是 66qnmc.top，端口 25565"></textarea></div>
             <div class="form-group"><label class="form-label">负责板块</label>
@@ -1934,7 +1941,7 @@ async function renderAdminAi(el) {
                     </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">还没有配置模型</td></tr>'}</tbody>
             </table>
         </div>`;
-    draftBind('ai', ['ai-name', 'ai-priority', 'ai-url', 'ai-model', 'ai-temp', 'ai-prompt', 'ai-std', 'ai-key', 'ai-enabled']);
+    draftBind('ai', ['ai-name', 'ai-priority', 'ai-url', 'ai-model', 'ai-temp', 'ai-prompt', 'ai-prompt-post', 'ai-prompt-comment', 'ai-prompt-report', 'ai-std', 'ai-key', 'ai-enabled']);
 }
 async function saveAiConfig() {
     const scopes = Array.from(document.querySelectorAll('.ai-scope:checked')).map(x => x.value);
@@ -1943,6 +1950,9 @@ async function saveAiConfig() {
         api_url: document.getElementById('ai-url').value.trim(),
         model: document.getElementById('ai-model').value.trim(),
         prompt: document.getElementById('ai-prompt').value.trim(),
+        prompt_post: document.getElementById('ai-prompt-post').value.trim(),
+        prompt_comment: document.getElementById('ai-prompt-comment').value.trim(),
+        prompt_report: document.getElementById('ai-prompt-report').value.trim(),
         standard_answers: parseStandardAnswers(document.getElementById('ai-std').value),
         scopes, priority: parseInt(document.getElementById('ai-priority').value) || 10,
         temperature: Number(document.getElementById('ai-temp').value) || 0.3,
@@ -1983,7 +1993,10 @@ async function editAiConfig(id) {
             <div class="form-group"><label class="form-label">温度</label><input class="input" id="ea-temp" type="number" step="0.1" value="${c.temperature ?? 0.3}"></div>
         </div>
         <div class="form-group"><label class="form-label">API Key <span class="text-tertiary">(留空表示不修改)</span></label><input class="input" id="ea-key" type="password" placeholder="不填则保持原密钥不变"></div>
-        <div class="form-group"><label class="form-label">提示词</label><textarea class="textarea" id="ea-prompt" rows="3">${esc(c.prompt || '')}</textarea></div>
+        <div class="form-group"><label class="form-label">客服提示词（AI 客服）</label><textarea class="textarea" id="ea-prompt" rows="3">${esc(c.prompt || '')}</textarea></div>
+        <div class="form-group"><label class="form-label">帖子审核提示词</label><textarea class="textarea" id="ea-prompt-post" rows="2" placeholder="留空则用内置默认">${esc(c.prompt_post || '')}</textarea></div>
+        <div class="form-group"><label class="form-label">评论审核提示词</label><textarea class="textarea" id="ea-prompt-comment" rows="2" placeholder="留空则用内置默认">${esc(c.prompt_comment || '')}</textarea></div>
+        <div class="form-group"><label class="form-label">举报复核提示词</label><textarea class="textarea" id="ea-prompt-report" rows="2" placeholder="留空则用内置默认">${esc(c.prompt_report || '')}</textarea></div>
         <div class="form-group"><label class="form-label">标准回答（每行一条：关键词1,关键词2 => 回答）</label>
             <textarea class="textarea" id="ea-std" rows="3">${esc(formatStandardAnswers(c.standard_answers))}</textarea></div>
         <div class="form-group"><label class="form-label">负责板块</label>
@@ -2000,6 +2013,9 @@ async function updateAiConfig(id) {
         api_url: document.getElementById('ea-url').value.trim(),
         model: document.getElementById('ea-model').value.trim(),
         prompt: document.getElementById('ea-prompt').value.trim(),
+        prompt_post: document.getElementById('ea-prompt-post').value.trim(),
+        prompt_comment: document.getElementById('ea-prompt-comment').value.trim(),
+        prompt_report: document.getElementById('ea-prompt-report').value.trim(),
         standard_answers: parseStandardAnswers(document.getElementById('ea-std').value),
         scopes,
         priority: parseInt(document.getElementById('ea-priority').value) || 10,
