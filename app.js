@@ -29,10 +29,13 @@ const APP = {
             setTimeout(() => toast('GitHub 登录失败：' + callbackError, 'error'), 0);
         }
         await this.loadSession();
+        const agreed = await checkAgreement();
+        if (!agreed) setTimeout(() => showAgreementModal(true), 700);
         sb.auth.onAuthStateChange(async (event, session) => {
             if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
                 if (session) {
                     await this.loadProfile(session.user.id);
+                    if (!(await checkAgreement())) setTimeout(() => showAgreementModal(true), 500);
                     if (location.hash === '#/login' || location.hash === '#/register' || !location.hash) location.hash = '#/';
                     else this.route();
                 }
@@ -92,9 +95,10 @@ const APP = {
         switch (route) {
             case '/': renderHome(app); break;
             case '/launcher': renderLauncher(app); break;
-            case '/commands': renderPublicList(app, 'server_commands', '服务器指令', ['command','description','permission']); break;
-            case '/events': renderPublicList(app, 'events', '服务器活动', ['name','description','starts_at','ends_at']); break;
-            case '/records': renderPublicList(app, 'game_records', '游戏实录', ['player_name','coordinates','image_url','status']); break;
+            case '/commands': renderCommands(app); break;
+            case '/events': renderEvents(app, params[0]); break;
+            case '/records': renderRecords(app); break;
+            case '/agreement': renderAgreementPage(app); break;
             case '/forum':
                 if (params[0] === 'new') renderForumNew(app);
                 else if (params[0]) renderForumDetail(app, params[0]);
@@ -189,8 +193,12 @@ function toggleMobileNav() {
     nav.innerHTML = `
         <a href="#/" class="nav-link" onclick="toggleMobileNav()">首页</a>
         <a href="#/launcher" class="nav-link" onclick="toggleMobileNav()">启动器</a>
+        <a href="#/commands" class="nav-link" onclick="toggleMobileNav()">指令</a>
+        <a href="#/events" class="nav-link" onclick="toggleMobileNav()">活动</a>
+        <a href="#/records" class="nav-link" onclick="toggleMobileNav()">实录</a>
         <a href="#/forum" class="nav-link" onclick="toggleMobileNav()">社区</a>
         <a href="#/messages" class="nav-link" onclick="toggleMobileNav()">私信</a>
+        <a href="#/agreement" class="nav-link" onclick="toggleMobileNav()">服务协议</a>
         ${APP.user ? `<a href="#/profile" class="nav-link" onclick="toggleMobileNav()">个人</a>` : ''}
         ${APP.isAdmin ? '<a href="#/admin" class="nav-link" onclick="toggleMobileNav()">管理后台</a>' : ''}`;
 }
@@ -212,6 +220,189 @@ function errText(err, fallback) {
     if (/duplicate key|already exists/i.test(err.message || '')) return '该内容已存在';
     if (/row-level security|not authorized/i.test(err.message || '')) return '没有权限执行此操作';
     return err.message || fallback;
+}
+
+// ==================== 图片压缩与上传（传输 HTTPS + 存储 AES-256）====================
+// 把图片压缩到目标体积（默认 100KB，可选 10-100KB）
+function compressImage(file, targetKB = 100) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('读取图片失败'));
+        reader.onload = () => {
+            const img = new Image();
+            img.onerror = () => reject(new Error('图片格式不支持'));
+            img.onload = () => {
+                const maxSide = 1600;
+                let { width, height } = img;
+                const scale = Math.min(1, maxSide / Math.max(width, height));
+                width = Math.round(width * scale);
+                height = Math.round(height * scale);
+                const canvas = document.createElement('canvas');
+                canvas.width = width; canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+
+                const targetBytes = Math.max(10, Math.min(100, Number(targetKB) || 100)) * 1024;
+                let quality = 0.92;
+                let out = canvas.toDataURL('image/jpeg', quality);
+                // 逐步降低质量，直到低于目标体积
+                let guard = 0;
+                while (out.length * 0.75 > targetBytes && quality > 0.2 && guard < 12) {
+                    quality -= 0.1; guard++;
+                    out = canvas.toDataURL('image/jpeg', quality);
+                }
+                // 若仍超标，缩小尺寸再压
+                let shrink = 1;
+                while (out.length * 0.75 > targetBytes && shrink < 4) {
+                    shrink += 0.5;
+                    const c2 = document.createElement('canvas');
+                    c2.width = Math.max(1, Math.round(width / shrink));
+                    c2.height = Math.max(1, Math.round(height / shrink));
+                    c2.getContext('2d').drawImage(canvas, 0, 0, c2.width, c2.height);
+                    out = c2.toDataURL('image/jpeg', Math.max(0.3, quality));
+                }
+                const blob = dataUrlToBlob(out);
+                resolve({ blob, dataUrl: out, sizeKB: Math.round(blob.size / 1024), quality: Math.round(quality * 100) });
+            };
+            img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    });
+}
+function dataUrlToBlob(dataUrl) {
+    const [head, body] = dataUrl.split(',');
+    const mime = (head.match(/:(.*?);/) || [])[1] || 'image/jpeg';
+    const bin = atob(body);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+}
+// 上传到 Supabase Storage（HTTPS 传输，静态 AES-256 加密）
+async function uploadImage(blob, prefix = 'img') {
+    if (!APP.user) throw new Error('请先登录');
+    const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+    const path = `${prefix}/${APP.user.id}-${Date.now()}.${ext}`;
+    const { error } = await sb.storage.from('uploads').upload(path, blob, { upsert: false, contentType: blob.type });
+    if (error) throw new Error(errText(error, '上传失败'));
+    const { data } = sb.storage.from('uploads').getPublicUrl(path);
+    return data.publicUrl;
+}
+
+// ==================== AI 客服悬浮窗 ====================
+const AI_CHAT = { history: [], busy: false };
+function toggleAiPanel() {
+    const p = document.getElementById('ai-panel');
+    if (!p) return;
+    p.style.display = p.style.display === 'none' ? 'flex' : 'none';
+    if (p.style.display === 'flex') document.getElementById('ai-input')?.focus();
+}
+function aiPush(text, who) {
+    const body = document.getElementById('ai-body');
+    if (!body) return;
+    const el = document.createElement('div');
+    el.className = 'ai-msg ' + (who === 'me' ? 'ai-msg-me' : 'ai-msg-bot');
+    el.textContent = text;
+    body.appendChild(el);
+    body.scrollTop = body.scrollHeight;
+}
+async function askAi() {
+    const input = document.getElementById('ai-input');
+    const message = (input?.value || '').trim();
+    if (!message || AI_CHAT.busy) return;
+    input.value = '';
+    aiPush(message, 'me');
+    AI_CHAT.history.push({ role: 'user', content: message });
+    AI_CHAT.busy = true;
+    aiPush('正在思考…', 'bot');
+    const body = document.getElementById('ai-body');
+    const thinking = body.lastElementChild;
+    try {
+        if (!sb) throw new Error('服务未配置');
+        const { data, error } = await sb.functions.invoke('ai', { body: { action: 'chat', message, history: AI_CHAT.history.slice(0, -1) } });
+        thinking.remove();
+        if (error) throw new Error(error.message || 'AI 服务暂不可用');
+        if (data?.error) throw new Error(data.error);
+        const reply = data?.reply || '（没有返回内容）';
+        aiPush(reply, 'bot');
+        AI_CHAT.history.push({ role: 'assistant', content: reply });
+    } catch (e) {
+        thinking.remove();
+        aiPush('抱歉，AI 客服暂时不可用：' + (e.message || e), 'bot');
+    } finally { AI_CHAT.busy = false; }
+}
+
+// ==================== 服务协议 ====================
+let AGREEMENT_TEXT = null;
+async function loadAgreementText() {
+    if (AGREEMENT_TEXT) return AGREEMENT_TEXT;
+    const { data } = await sb.from('server_settings').select('value').eq('key', 'legal').maybeSingle();
+    AGREEMENT_TEXT = (data && data.value) || {};
+    return AGREEMENT_TEXT;
+}
+function defaultAgreement() {
+    return '欢迎使用 66qn 服务器社区。\n\n'
+        + '1. 本站为玩家自发组织的非官方社区，与 Mojang / Microsoft 无任何关联。\n'
+        + '2. 禁止发布违法违规、色情暴力、辱骂他人、广告刷屏等内容。\n'
+        + '3. 请勿在社区中泄露他人隐私信息。\n'
+        + '4. 违规内容将被删除，严重者将撤销注册资格。\n'
+        + '5. 使用本站即表示你已阅读并同意以上条款。';
+}
+async function showAgreementModal(force = false) {
+    const legal = await loadAgreementText();
+    const text = legal.agreement_text || defaultAgreement();
+    const title = legal.agreement_title || '服务协议与免责声明';
+    const overlay = document.createElement('div');
+    overlay.className = 'agree-overlay';
+    overlay.id = 'agree-overlay';
+    overlay.innerHTML = `
+        <div class="agree-card">
+            <div class="agree-head">${esc(title)}</div>
+            <div class="agree-body">${esc(text).replace(/\n/g, '<br>')}</div>
+            <div class="agree-foot">
+                ${force ? '' : '<button class="btn btn-secondary" onclick="document.getElementById(\'agree-overlay\').remove()">稍后再说</button>'}
+                <a href="#/agreement" class="btn btn-secondary" onclick="document.getElementById('agree-overlay').remove()">查看独立页面</a>
+                <button class="btn btn-primary" onclick="acceptAgreement()">我已阅读并同意</button>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+}
+async function acceptAgreement() {
+    if (APP.user) {
+        const { error } = await sb.from('agreements').upsert({ user_id: APP.user.id, version: 'v1', accepted_at: new Date().toISOString() });
+        if (error) return toast(errText(error, '保存协议记录失败'), 'error');
+        AGREEMENT_OK = true;
+    }
+    localStorage.setItem('66qn_agreed', '1');
+    document.getElementById('agree-overlay')?.remove();
+    toast('感谢同意，欢迎使用');
+}
+let AGREEMENT_OK = false;
+async function checkAgreement() {
+    if (localStorage.getItem('66qn_agreed') === '1') { AGREEMENT_OK = true; return true; }
+    if (APP.user) {
+        const { data } = await sb.from('agreements').select('user_id').eq('user_id', APP.user.id).maybeSingle();
+        if (data) { AGREEMENT_OK = true; localStorage.setItem('66qn_agreed', '1'); return true; }
+    }
+    return false;
+}
+// 在需要登录的动作前校验协议
+function requireAgreement() {
+    if (AGREEMENT_OK || localStorage.getItem('66qn_agreed') === '1') return true;
+    toast('当前不同意该协议，请同意后再使用', 'error');
+    showAgreementModal(true);
+    return false;
+}
+
+// ==================== 页面：服务协议独立页 ====================
+async function renderAgreementPage(app) {
+    const legal = await loadAgreementText();
+    const text = legal.agreement_text || defaultAgreement();
+    app.innerHTML = `
+    <div class="container" style="max-width:720px;padding:var(--space-12) var(--space-6)">
+        <h1 class="section-title">${esc(legal.agreement_title || '服务协议与免责声明')}</h1>
+        <div class="card" style="line-height:1.9;font-size:0.9375rem">${esc(text).replace(/\n/g, '<br>')}</div>
+        <div style="margin-top:1.5rem"><button class="btn btn-primary" onclick="acceptAgreement();location.hash='#/'">我已阅读并同意</button></div>
+    </div>`;
 }
 
 // ==================== SVG 图标 ====================
@@ -258,11 +449,32 @@ const Settings = {
 };
 
 // ==================== 页面：首页 ====================
+// ==================== 服务器实时状态（通过 MOTD 接口）====================
+async function fetchServerStatus(ip, port) {
+    const host = String(ip || '').replace(/^https?:\/\//, '').replace(/:\d+$/, '').trim();
+    if (!host || host === '待填写') return null;
+    const address = host + ':' + (port || '25565');
+    try {
+        const res = await fetch('https://api.mcsrvstat.us/3/' + encodeURIComponent(address));
+        if (!res.ok) return null;
+        const d = await res.json();
+        if (!d || !d.online) return null;
+        const motd = Array.isArray(d.motd?.clean) ? d.motd.clean.join(' ') : '';
+        return {
+            online: d.players?.online ?? 0,
+            max: d.players?.max ?? null,
+            version: d.version || '',
+            motd,
+        };
+    } catch { return null; }
+}
+
 async function renderHome(app) {
     app.innerHTML = `<div class="container"><div style="padding:var(--space-16) 0;text-align:center;color:var(--color-text-tertiary)">加载中…</div></div>`;
     const info = await Settings.load();
     const s = info.server || {};
     const site = info.site || {};
+    const live = await fetchServerStatus(s.ip, s.port);
 
     app.innerHTML = `
     <div class="container">
@@ -277,12 +489,12 @@ async function renderHome(app) {
         <section class="section" style="padding-top:0">
             <div class="status-cards">
                 <div class="card status-card">
-                    <div class="status-card-value">${esc(s.version || '—')}</div>
-                    <div class="status-card-label">游戏版本</div>
+                    <div class="status-card-value">${esc((live && live.version) || s.version || '—')}</div>
+                    <div class="status-card-label">游戏版本${live ? '（实时）' : ''}</div>
                 </div>
                 <div class="card status-card">
-                    <div class="status-card-value">${(s.players != null ? s.players : 0)}/${esc(s.maxPlayers || 20)}</div>
-                    <div class="status-card-label">在线人数</div>
+                    <div class="status-card-value">${live ? `${live.online}/${live.max ?? esc(s.maxPlayers || 20)}` : `${(s.players != null ? s.players : 0)}/${esc(s.maxPlayers || 20)}`}</div>
+                    <div class="status-card-label">在线人数${live ? '（实时）' : ''}</div>
                 </div>
                 <div class="card status-card">
                     <div class="status-card-value" style="font-size:1rem;word-break:break-all">${esc(s.ip || '待填写')}:${esc(s.port || '25565')}</div>
@@ -323,11 +535,158 @@ async function copyAddress() {
     navigator.clipboard.writeText(addr).then(() => toast('地址已复制到剪贴板'));
 }
 
-async function renderPublicList(app, table, title, fields) {
-    app.innerHTML = `<div class="container" style="max-width:900px;padding:var(--space-12) var(--space-6)"><h1 class="section-title">${title}</h1><div class="card" id="public-list">${loadingBlock()}</div></div>`;
-    const {data,error}=await sb.from(table).select('*').order('created_at',{ascending:false});
-    const box=document.getElementById('public-list'); if(error){box.innerHTML=`<p class="text-secondary">暂时无法加载内容</p>`;return;}
-    box.innerHTML=(data||[]).filter(x=>x.enabled!==false && (table!=='game_records'||x.status==='approved')).map(x=>`<article style="padding:1rem 0;border-bottom:1px solid var(--color-border-light)"><h3>${esc(x.name||x.command||x.player_name||'实录')}</h3><p class="text-secondary">${esc(x.description||x.coordinates||'')}</p>${x.permission?`<span class="badge badge-gray">权限：${esc(x.permission)}</span>`:''}${x.image_url?`<a href="${esc(x.image_url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">查看图片</a>`:''}</article>`).join('')||'<p class="text-secondary">暂无内容</p>';
+// ==================== 页面：服务器指令 ====================
+async function renderCommands(app) {
+    app.innerHTML = `<div class="container" style="max-width:860px;padding:var(--space-12) var(--space-6)"><h1 class="section-title">服务器特有指令</h1><div class="card" id="cmd-list">${loadingBlock()}</div></div>`;
+    const { data } = await sb.from('server_commands').select('*').eq('enabled', true).order('created_at', { ascending: false });
+    const box = document.getElementById('cmd-list');
+    box.innerHTML = (data || []).map(c => `
+        <div style="padding:.9rem 0;border-bottom:1px solid var(--color-border-light)">
+            <code style="font-size:.9375rem;font-weight:600;color:var(--color-accent)">${esc(c.command)}</code>
+            <span class="badge badge-gray" style="margin-left:.5rem">${esc(c.permission || '玩家')}</span>
+            <p class="text-secondary" style="margin-top:.35rem;font-size:.875rem">${esc(c.description || '')}</p>
+        </div>`).join('') || '<p class="text-secondary">管理员还没有添加指令</p>';
+}
+
+// ==================== 页面：活动 ====================
+async function renderEvents(app, eventId) {
+    if (eventId) return renderEventDetail(app, eventId);
+    app.innerHTML = `<div class="container" style="max-width:860px;padding:var(--space-12) var(--space-6)"><h1 class="section-title">服务器活动</h1><div class="card" id="event-list">${loadingBlock()}</div></div>`;
+    const { data } = await sb.from('events').select('*').eq('enabled', true).order('created_at', { ascending: false });
+    const box = document.getElementById('event-list');
+    box.innerHTML = (data || []).map(e => `
+        <div style="padding:1rem 0;border-bottom:1px solid var(--color-border-light)">
+            <a href="#/events/${e.id}" style="font-size:1rem;font-weight:600">${esc(e.name)}</a>
+            ${e.signup_enabled ? '<span class="badge badge-blue" style="margin-left:.5rem">开放报名</span>' : '<span class="badge badge-gray" style="margin-left:.5rem">仅展示</span>'}
+            <p class="text-secondary" style="margin-top:.35rem;font-size:.875rem">${esc(e.description || '')}</p>
+            ${e.starts_at ? `<div class="text-tertiary" style="margin-top:.35rem">开始：${new Date(e.starts_at).toLocaleString('zh-CN')}</div>` : ''}
+        </div>`).join('') || '<p class="text-secondary">暂无活动</p>';
+}
+
+async function renderEventDetail(app, eventId) {
+    app.innerHTML = `<div class="container" style="max-width:720px;padding:var(--space-12) var(--space-6)">${loadingBlock()}</div>`;
+    const { data: ev } = await sb.from('events').select('*').eq('id', eventId).maybeSingle();
+    if (!ev) { app.innerHTML = '<div class="container" style="padding:var(--space-16);text-align:center">活动不存在</div>'; return; }
+    const { data: signups } = await sb.from('event_signups').select('*, user:profiles!event_signups_user_id_fkey(username)').eq('event_id', eventId).order('created_at', { ascending: true });
+    const mine = APP.user ? (signups || []).find(s => s.user_id === APP.user.id) : null;
+
+    app.innerHTML = `
+    <div class="container" style="max-width:720px;padding:var(--space-8) var(--space-6)">
+        <a href="#/events" class="btn btn-ghost btn-sm mb-4">${icons.back} 返回活动</a>
+        <h1 class="section-title">${esc(ev.name)}</h1>
+        <div class="card mb-8" style="line-height:1.8;font-size:.9375rem">${esc(ev.description || '暂无描述').replace(/\n/g,'<br>')}</div>
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">报名 (${(signups || []).length})</h3>
+        ${ev.signup_enabled ? (APP.user ? (mine ? '<div class="card mb-4 text-secondary">你已报名，可等待管理员审核。</div>' : `
+            <div class="card mb-4">
+                <div class="form-group"><label class="form-label">报名留言</label><textarea class="textarea" id="signup-text" rows="3" maxlength="500" placeholder="介绍一下你的情况或想参加的理由"></textarea></div>
+                <div class="form-group"><label class="form-label">上传图片（可选，自动压缩至 100KB 内）</label>
+                    <input class="input" type="file" id="signup-file" accept="image/*" onchange="previewSignupImage(this)"></div>
+                <div id="signup-preview"></div>
+                <button class="btn btn-primary" onclick="submitSignup('${ev.id}')">提交报名</button>
+            </div>`) : '<p class="text-secondary mb-4">请先登录后报名</p>') : '<p class="text-secondary mb-4">该活动未开放报名</p>'}
+        <div class="card" style="padding:0;overflow:hidden">
+            ${(signups || []).map(s => `
+                <div style="padding:.85rem 1rem;border-bottom:1px solid var(--color-border-light)">
+                    <strong style="font-size:.875rem">${esc(s.user?.username || '玩家')}</strong>
+                    <p class="text-secondary" style="font-size:.875rem;margin-top:.25rem">${esc(s.text_content || '')}</p>
+                    ${s.image_url ? `<a href="${esc(s.image_url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="margin-top:.5rem">查看图片</a>` : ''}
+                </div>`).join('') || '<div style="padding:1.5rem;text-align:center;color:var(--color-text-tertiary)">还没有人报名</div>'}
+        </div>
+    </div>`;
+}
+
+async function previewSignupImage(input) {
+    const file = input.files?.[0];
+    if (!file) return;
+    const box = document.getElementById('signup-preview');
+    box.innerHTML = '<p class="text-tertiary">压缩中…</p>';
+    try {
+        const { dataUrl, sizeKB } = await compressImage(file, 100);
+        window.__signupImage = dataUrl;
+        box.innerHTML = `<div class="thumb-preview"><img src="${dataUrl}" alt=""><span class="text-secondary" style="font-size:.8125rem">已压缩至约 ${sizeKB} KB</span></div>`;
+    } catch (e) { box.innerHTML = ''; toast(e.message, 'error'); }
+}
+
+async function submitSignup(eventId) {
+    if (!requireLogin() || !requireAgreement()) return;
+    const text = document.getElementById('signup-text').value.trim();
+    if (text.length < 2) return toast('请填写报名留言', 'error');
+    let imageUrl = null;
+    try {
+        if (window.__signupImage) imageUrl = await uploadImage(dataUrlToBlob(window.__signupImage), 'events');
+    } catch (e) { return toast(e.message, 'error'); }
+    const { error } = await sb.from('event_signups').insert({ event_id: eventId, user_id: APP.user.id, text_content: text, image_url: imageUrl });
+    if (error) return toast(errText(error, '报名失败'), 'error');
+    window.__signupImage = null;
+    toast('报名已提交');
+    APP.route();
+}
+
+// ==================== 页面：游戏实录 ====================
+async function renderRecords(app) {
+    app.innerHTML = `<div class="container" style="max-width:900px;padding:var(--space-12) var(--space-6)"><h1 class="section-title">游戏实录</h1><div id="rec-body">${loadingBlock()}</div></div>`;
+    const { data } = await sb.from('game_records').select('*').eq('status', 'approved').order('created_at', { ascending: false });
+    const body = document.getElementById('rec-body');
+    body.innerHTML = `
+        ${APP.user ? `
+        <div class="card mb-8">
+            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">上传我的实录（人工审核）</h3>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">游戏名字</label><input class="input" id="rec-name" value="${esc(APP.user.game_id || APP.user.username)}" maxlength="32"></div>
+                <div class="form-group"><label class="form-label">坐标</label><input class="input" id="rec-coord" placeholder="例如 120,64,-340" maxlength="64"></div>
+            </div>
+            <div class="form-group"><label class="form-label">压缩目标体积</label>
+                <select class="input" id="rec-size">
+                    <option value="100">100 KB（推荐，清晰）</option>
+                    <option value="60">60 KB</option>
+                    <option value="30">30 KB</option>
+                    <option value="10">10 KB（最省流量）</option>
+                </select></div>
+            <div class="form-group"><label class="form-label">截图</label>
+                <input class="input" type="file" id="rec-file" accept="image/*" onchange="previewRecordImage(this)"></div>
+            <div id="rec-preview"></div>
+            <button class="btn btn-primary" style="margin-top:.75rem" onclick="submitRecord()">提交审核</button>
+        </div>` : '<p class="text-secondary mb-8">请先登录后上传实录</p>'}
+        <div class="grid-3">
+            ${(data || []).map(r => `
+                <div class="card" style="padding:0;overflow:hidden">
+                    <img src="${esc(r.image_url)}" alt="" style="width:100%;height:170px;object-fit:cover" loading="lazy">
+                    <div style="padding:.85rem 1rem">
+                        <strong style="font-size:.9375rem">${esc(r.player_name)}</strong>
+                        <div class="text-tertiary" style="font-size:.8125rem;margin-top:.2rem">${esc(r.coordinates)}</div>
+                    </div>
+                </div>`).join('') || '<p class="text-secondary">还没有通过审核的实录</p>'}
+        </div>`;
+}
+
+async function previewRecordImage(input) {
+    const file = input.files?.[0];
+    if (!file) return;
+    const target = Number(document.getElementById('rec-size').value) || 100;
+    const box = document.getElementById('rec-preview');
+    box.innerHTML = '<p class="text-tertiary">压缩中…</p>';
+    try {
+        const { dataUrl, sizeKB } = await compressImage(file, target);
+        window.__recImage = dataUrl;
+        box.innerHTML = `<div class="thumb-preview"><img src="${dataUrl}" alt=""><span class="text-secondary" style="font-size:.8125rem">已压缩至约 ${sizeKB} KB（目标 ${target} KB）</span></div>`;
+    } catch (e) { box.innerHTML = ''; toast(e.message, 'error'); }
+}
+
+async function submitRecord() {
+    if (!requireLogin() || !requireAgreement()) return;
+    const playerName = document.getElementById('rec-name').value.trim();
+    const coordinates = document.getElementById('rec-coord').value.trim();
+    if (!playerName) return toast('请填写游戏名字', 'error');
+    if (!coordinates) return toast('请填写坐标', 'error');
+    if (!window.__recImage) return toast('请先选择并压缩截图', 'error');
+    let imageUrl;
+    try { imageUrl = await uploadImage(dataUrlToBlob(window.__recImage), 'records'); }
+    catch (e) { return toast(e.message, 'error'); }
+    const { error } = await sb.from('game_records').insert({ user_id: APP.user.id, player_name: playerName, coordinates, image_url: imageUrl, status: 'pending' });
+    if (error) return toast(errText(error, '提交失败'), 'error');
+    window.__recImage = null;
+    toast('已提交，等待管理员审核');
+    APP.route();
 }
 
 // ==================== 页面：启动器 ====================
@@ -514,11 +873,13 @@ async function toggleLike(postId) {
 }
 
 async function submitComment(postId) {
-    if (!requireLogin()) return;
+    if (!requireLogin() || !requireAgreement()) return;
     const input = document.getElementById('comment-input');
     const content = input.value.trim();
     if (!content) return toast('请输入评论内容', 'error');
     if (content.length > 2000) return toast('评论不能超过2000字', 'error');
+    const review = await aiModerate('comment', content);
+    if (review && review.verdict === 'reject') return toast('评论未通过审核：' + (review.reason || '疑似违规'), 'error');
     const { error } = await sb.from('comments').insert({ post_id: postId, user_id: APP.user.id, content });
     if (error) return toast(errText(error, '评论失败'), 'error');
     toast('评论已发送');
@@ -559,12 +920,18 @@ function showReportModal(type, id) {
 }
 
 async function submitReport(type, id) {
+    if (!requireAgreement()) return;
     const reason = document.getElementById('report-reason').value.trim();
     if (reason.length < 10) return toast('举报理由至少需要10个字符', 'error');
-    const { error } = await sb.from('reports').insert({ reporter_id: APP.user.id, target_type: type, target_id: id, reason });
+    const { data, error } = await sb.from('reports').insert({ reporter_id: APP.user.id, target_type: type, target_id: id, reason }).select().maybeSingle();
     if (error) return toast(errText(error, '举报失败'), 'error');
     document.querySelector('.modal-overlay')?.remove();
-    toast('举报已提交，管理员将尽快处理');
+    toast('举报已提交，AI 正在复核');
+    // 交由 AI 复核，判定应删除时自动删除
+    try {
+        const { data: rv } = await sb.functions.invoke('ai', { body: { action: 'review_report', report_id: data.id } });
+        if (rv && rv.autoDeleted) toast('AI 已判定违规并自动删除相关内容', 'success');
+    } catch { /* AI 未配置时静默 */ }
 }
 
 // ==================== 页面：发帖 ====================
@@ -588,16 +955,34 @@ function renderForumNew(app) {
 }
 
 async function submitPost() {
-    if (!requireLogin()) return;
+    if (!requireLogin() || !requireAgreement()) return;
     const title = document.getElementById('post-title').value.trim();
     const content = document.getElementById('post-content').value.trim();
     const category = document.getElementById('post-category').value;
     if (title.length < 5) return toast('标题至少5个字符', 'error');
     if (content.length < 10) return toast('正文至少10个字符', 'error');
+
+    // AI 审核（未配置模型时自动跳过）
+    toast('正在审核内容…');
+    const review = await aiModerate('post', `${title}\n${content}`);
+    if (review && review.verdict === 'reject') {
+        await sb.from('ai_reviews').insert({ target_type: 'post', target_id: APP.user.id, verdict: 'reject', reason: review.reason || '', model: review.model || '' });
+        return toast('内容未通过审核：' + (review.reason || '疑似违规'), 'error');
+    }
+
     const { error } = await sb.from('posts').insert({ user_id: APP.user.id, title, content, category });
     if (error) return toast(errText(error, '发布失败'), 'error');
     toast('帖子已发布');
     location.hash = '#/forum';
+}
+
+// 调用 AI 审核（失败或未配置时返回 null，不阻断发布）
+async function aiModerate(targetType, content) {
+    try {
+        const { data, error } = await sb.functions.invoke('ai', { body: { action: 'moderate', target_type: targetType, content } });
+        if (error || !data || data.error) return null;
+        return data;
+    } catch { return null; }
 }
 
 // ==================== 页面：私信列表 ====================
@@ -767,6 +1152,7 @@ async function doLogin() {
         if (profile.status === 'banned') return toast('该账户已被撤销注册资格', 'error');
         email = profile.email;
     }
+    if (!requireAgreement()) return;
     const { error } = await sb.auth.signInWithPassword({ email, password });
     if (error) return toast('邮箱或密码错误', 'error');
     await APP.loadProfile((await sb.auth.getUser()).data.user.id);
@@ -908,6 +1294,7 @@ async function renderAdmin(app, sub) {
         { key: 'events', label: '活动管理', icon: icons.users },
         { key: 'records', label: '游戏实录', icon: icons.download },
         { key: 'ai', label: 'AI 配置', icon: icons.shield },
+        { key: 'agreement', label: '协议设置', icon: icons.flag },
         { key: 'server', label: '服务器设置', icon: icons.settings },
     ];
     app.innerHTML = `
@@ -927,8 +1314,9 @@ async function renderAdmin(app, sub) {
         case 'features': renderAdminSimple(content, 'game_features', '玩法特色', ['title','description','sort_order','enabled']); break;
         case 'commands': renderAdminSimple(content, 'server_commands', '服务器指令', ['command','description','permission','enabled']); break;
         case 'events': renderAdminEvents(content); break;
-        case 'records': renderAdminSimple(content, 'game_records', '游戏实录', ['player_name','coordinates','image_url','status']); break;
-        case 'ai': renderAdminSimple(content, 'ai_configs', 'AI 配置', ['name','api_url','model','prompt','enabled']); break;
+        case 'records': renderAdminRecords(content); break;
+        case 'ai': renderAdminAi(content); break;
+        case 'agreement': renderAdminAgreement(content); break;
         case 'server': renderAdminServer(content); break;
         default: renderAdminDashboard(content);
     }
@@ -1011,6 +1399,7 @@ async function renderAdminPosts(el) {
                         <td>
                             <button class="btn btn-ghost btn-sm" onclick="adminTogglePost('${p.id}','${p.status}')">${p.status === 'published' ? '隐藏' : '恢复'}</button>
                             <button class="btn btn-ghost btn-sm" onclick="adminTogglePin('${p.id}',${p.is_pinned ? 'false' : 'true'})">${p.is_pinned ? '取消置顶' : '置顶'}</button>
+                            <button class="btn btn-ghost btn-sm" onclick="adminDeletePost('${p.id}')">删除</button>
                         </td>
                     </tr>`).join('')}</tbody>
             </table>
@@ -1025,6 +1414,18 @@ async function adminTogglePost(pid, current) {
 async function adminTogglePin(pid, val) {
     await sb.from('posts').update({ is_pinned: val }).eq('id', pid);
     toast('操作成功'); renderAdminPosts(document.getElementById('admin-content'));
+}
+async function adminDeletePost(pid) {
+    if (!confirm('确定删除该帖子？删除后社区不再显示。')) return;
+    const { error } = await sb.from('posts').update({ status: 'deleted' }).eq('id', pid);
+    if (error) return toast(errText(error, '删除失败'), 'error');
+    toast('帖子已删除'); renderAdminPosts(document.getElementById('admin-content'));
+}
+async function adminDeleteComment(cid) {
+    if (!confirm('确定删除该评论？')) return;
+    const { error } = await sb.from('comments').update({ status: 'deleted' }).eq('id', cid);
+    if (error) return toast(errText(error, '删除失败'), 'error');
+    toast('评论已删除'); renderAdminComments(document.getElementById('admin-content'));
 }
 
 async function renderAdminComments(el) {
@@ -1041,7 +1442,7 @@ async function renderAdminComments(el) {
                         <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.content)}</td>
                         <td>${esc(c.author?.username || '未知')}</td>
                         <td><span class="badge ${c.status === 'published' ? 'badge-green' : 'badge-red'}">${c.status}</span></td>
-                        <td><button class="btn btn-ghost btn-sm" onclick="deleteComment('${c.id}');renderAdminComments(document.getElementById('admin-content'))">删除</button></td>
+                        <td><button class="btn btn-ghost btn-sm" onclick="adminDeleteComment('${c.id}')">删除</button></td>
                     </tr>`).join('')}</tbody>
             </table>
         </div>`;
@@ -1064,8 +1465,9 @@ async function renderAdminReports(el) {
                         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.reason)}</td>
                         <td><span class="badge ${r.status === 'pending' ? 'badge-yellow' : 'badge-green'}">${r.status}</span></td>
                         <td>${r.status === 'pending' ? `
-                            <button class="btn btn-ghost btn-sm" onclick="resolveReport('${r.id}','resolved')">处理</button>
-                            <button class="btn btn-ghost btn-sm" onclick="resolveReport('${r.id}','dismissed')">驳回</button>` : '-'}</td>
+                            <button class="btn btn-ghost btn-sm" onclick="reportAction('${r.id}','delete')">禁止使用</button>
+                            <button class="btn btn-ghost btn-sm" onclick="reportAction('${r.id}','ban')">封禁用户</button>
+                            <button class="btn btn-ghost btn-sm" onclick="reportAction('${r.id}','dismiss')">驳回</button>` : '<span class="text-tertiary">已处理</span>'}</td>
                     </tr>`).join('')}</tbody>
             </table>`}
         </div>`;
@@ -1075,6 +1477,16 @@ async function resolveReport(rid, status) {
     const { error } = await sb.from('reports').update({ status, admin_note: '处理人：' + APP.user.username }).eq('id', rid);
     if (error) return toast(errText(error, '操作失败'), 'error');
     toast('举报已处理');
+    renderAdminReports(document.getElementById('admin-content'));
+}
+
+// 举报处理：禁止使用（删除内容）/ 封禁用户 / 驳回
+async function reportAction(rid, action) {
+    const label = action === 'delete' ? '禁止使用并删除该内容' : (action === 'ban' ? '封禁该用户' : '驳回该举报');
+    if (!confirm(`确定要${label}吗？`)) return;
+    const { error } = await sb.rpc('resolve_report_action', { p_report: rid, p_action: action });
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    toast(action === 'dismiss' ? '已驳回' : '已处理，内容已移除');
     renderAdminReports(document.getElementById('admin-content'));
 }
 
@@ -1100,7 +1512,235 @@ async function renderAdminSimple(el, table, title, fields) {
 }
 async function adminAddSimple(table, fields) { const value={}; fields.filter(f=>f!=='enabled').forEach(f=>value[f]=document.getElementById('new-'+f)?.value.trim()||''); if(fields.includes('sort_order')) value.sort_order=parseInt(value.sort_order)||0; if(fields.includes('enabled')) value.enabled=true; const {error}=await sb.from(table).insert(value); if(error)return toast(errText(error,'新增失败'),'error'); toast('已新增'); renderAdminSimple(document.getElementById('admin-content'),table,table,fields); }
 async function adminDeleteSimple(table,id) { if(!confirm('确定删除？'))return; const {error}=await sb.from(table).delete().eq('id',id); if(error)return toast(errText(error,'删除失败'),'error'); toast('已删除'); APP.route(); }
-async function renderAdminEvents(el) { return renderAdminSimple(el,'events','活动管理',['name','description','starts_at','ends_at','signup_enabled','enabled']); }
+async function renderAdminEvents(el) {
+    const { data } = await sb.from('events').select('*, signups:event_signups(count)').order('created_at', { ascending: false });
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">活动管理</h2>
+        <div class="card mb-8">
+            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">发布新活动</h3>
+            <div class="form-group"><label class="form-label">活动名称</label><input class="input" id="ev-name" placeholder="例如 秋季建筑大赛"></div>
+            <div class="form-group"><label class="form-label">活动说明</label><textarea class="textarea" id="ev-desc" rows="3"></textarea></div>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">开始时间</label><input class="input" id="ev-start" type="datetime-local"></div>
+                <div class="form-group"><label class="form-label">结束时间</label><input class="input" id="ev-end" type="datetime-local"></div>
+            </div>
+            <label class="flex-center" style="gap:.35rem;margin-bottom:1rem"><input type="checkbox" id="ev-signup" checked> 开启活动报名（用户可上传图片和文字）</label>
+            <button class="btn btn-primary" onclick="saveEvent()">发布活动</button>
+        </div>
+        <div class="card" style="padding:0;overflow:auto">
+            <table class="data-table">
+                <thead><tr><th>活动</th><th>报名</th><th>报名人数</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody>${(data || []).map(e => `
+                    <tr>
+                        <td><a href="#/events/${e.id}" style="color:var(--color-accent)">${esc(e.name)}</a></td>
+                        <td>${e.signup_enabled ? '<span class="badge badge-blue">已开启</span>' : '<span class="badge badge-gray">未开启</span>'}</td>
+                        <td>${e.signups?.[0]?.count ?? 0}</td>
+                        <td><span class="badge ${e.enabled ? 'badge-green' : 'badge-red'}">${e.enabled ? '进行中' : '已关闭'}</span></td>
+                        <td>
+                            <button class="btn btn-ghost btn-sm" onclick="adminToggleEvent('${e.id}',${e.enabled ? 'false' : 'true'})">${e.enabled ? '关闭活动' : '开启活动'}</button>
+                            <button class="btn btn-ghost btn-sm" onclick="adminToggleEventSignup('${e.id}',${e.signup_enabled ? 'false' : 'true'})">${e.signup_enabled ? '关闭报名' : '开启报名'}</button>
+                            <button class="btn btn-ghost btn-sm" onclick="adminDeleteEvent('${e.id}')">删除</button>
+                        </td>
+                    </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">暂无活动</td></tr>'}</tbody>
+            </table>
+        </div>`;
+}
+async function saveEvent() {
+    const name = document.getElementById('ev-name').value.trim();
+    if (!name) return toast('请填写活动名称', 'error');
+    const payload = {
+        name,
+        description: document.getElementById('ev-desc').value.trim(),
+        starts_at: document.getElementById('ev-start').value || null,
+        ends_at: document.getElementById('ev-end').value || null,
+        signup_enabled: document.getElementById('ev-signup').checked,
+        enabled: true,
+    };
+    const { error } = await sb.from('events').insert(payload);
+    if (error) return toast(errText(error, '发布失败'), 'error');
+    toast('活动已发布');
+    renderAdminEvents(document.getElementById('admin-content'));
+}
+async function adminToggleEvent(id, enabled) {
+    await sb.from('events').update({ enabled }).eq('id', id);
+    toast(enabled ? '活动已开启' : '活动已关闭');
+    renderAdminEvents(document.getElementById('admin-content'));
+}
+async function adminToggleEventSignup(id, on) {
+    await sb.from('events').update({ signup_enabled: on }).eq('id', id);
+    toast(on ? '已开启报名' : '已关闭报名');
+    renderAdminEvents(document.getElementById('admin-content'));
+}
+async function adminDeleteEvent(id) {
+    if (!confirm('确定删除该活动及其报名？')) return;
+    await sb.from('events').delete().eq('id', id);
+    toast('已删除');
+    renderAdminEvents(document.getElementById('admin-content'));
+}
+
+// ==================== 后台：游戏实录审核 ====================
+async function renderAdminRecords(el) {
+    const { data } = await sb.from('game_records').select('*, user:profiles!game_records_user_id_fkey(username)').order('created_at', { ascending: false }).limit(200);
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">游戏实录审核</h2>
+        <div class="card" style="padding:0;overflow:auto">
+            <table class="data-table">
+                <thead><tr><th>截图</th><th>玩家</th><th>坐标</th><th>提交人</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody>${(data || []).map(r => `
+                    <tr>
+                        <td><a href="${esc(r.image_url)}" target="_blank" rel="noopener"><img src="${esc(r.image_url)}" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:6px"></a></td>
+                        <td>${esc(r.player_name)}</td>
+                        <td>${esc(r.coordinates)}</td>
+                        <td>${esc(r.user?.username || '')}</td>
+                        <td><span class="badge ${r.status === 'approved' ? 'badge-green' : (r.status === 'rejected' ? 'badge-red' : 'badge-yellow')}">${r.status}</span></td>
+                        <td>
+                            ${r.status !== 'approved' ? `<button class="btn btn-ghost btn-sm" onclick="adminReviewRecord('${r.id}','approved')">通过</button>` : ''}
+                            ${r.status !== 'rejected' ? `<button class="btn btn-ghost btn-sm" onclick="adminReviewRecord('${r.id}','rejected')">拒绝</button>` : ''}
+                            <button class="btn btn-ghost btn-sm" onclick="adminDeleteRecord('${r.id}')">删除</button>
+                        </td>
+                    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">暂无实录</td></tr>'}</tbody>
+            </table>
+        </div>`;
+}
+async function adminReviewRecord(id, status) {
+    const { error } = await sb.from('game_records').update({ status }).eq('id', id);
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    toast(status === 'approved' ? '已通过' : '已拒绝');
+    renderAdminRecords(document.getElementById('admin-content'));
+}
+async function adminDeleteRecord(id) {
+    if (!confirm('确定删除该实录？')) return;
+    const { error } = await sb.from('game_records').delete().eq('id', id);
+    if (error) return toast(errText(error, '删除失败'), 'error');
+    toast('已删除');
+    renderAdminRecords(document.getElementById('admin-content'));
+}
+
+// ==================== 后台：AI 配置 ====================
+const AI_SCOPES = [
+    { key: 'chat', label: 'AI 客服' },
+    { key: 'posts', label: '帖子审核' },
+    { key: 'comments', label: '评论审核' },
+    { key: 'reports', label: '举报复核' },
+];
+function parseStandardAnswers(text) {
+    return (text || '').split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+        const [kw, ans] = line.split('=>');
+        if (!ans) return null;
+        return { keywords: kw.split(/[,，]/).map(s => s.trim()).filter(Boolean), answer: ans.trim() };
+    }).filter(Boolean);
+}
+function formatStandardAnswers(list) {
+    if (!Array.isArray(list)) return '';
+    return list.map(x => `${(x.keywords || []).join(',')} => ${x.answer || ''}`).join('\n');
+}
+async function renderAdminAi(el) {
+    const { data: configs } = await sb.from('ai_configs').select('*').order('priority', { ascending: true });
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-4)">AI 配置</h2>
+        <p class="text-secondary mb-8" style="font-size:.875rem">支持配置多个模型，按"负责板块"自动分配。密钥使用 pgcrypto 加密存储，前端无法读回明文。需先部署 Edge Function <code>ai</code>。</p>
+        <div class="card mb-8">
+            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">新增模型配置</h3>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">配置名称</label><input class="input" id="ai-name" placeholder="例如 主力模型"></div>
+                <div class="form-group"><label class="form-label">优先级（数字越小越优先）</label><input class="input" id="ai-priority" type="number" value="10"></div>
+            </div>
+            <div class="form-group"><label class="form-label">API 地址</label><input class="input" id="ai-url" placeholder="https://api.openai.com/v1 或完整 /chat/completions 地址"></div>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">模型名称</label><input class="input" id="ai-model" placeholder="gpt-4o-mini / qwen-plus / deepseek-chat"></div>
+                <div class="form-group"><label class="form-label">温度</label><input class="input" id="ai-temp" type="number" step="0.1" value="0.3"></div>
+            </div>
+            <div class="form-group"><label class="form-label">API Key（保存后不可查看，只能覆盖）</label><input class="input" id="ai-key" type="password" placeholder="sk-..."></div>
+            <div class="form-group"><label class="form-label">提示词</label><textarea class="textarea" id="ai-prompt" rows="3" placeholder="你是 66qn 服务器的客服助手…"></textarea></div>
+            <div class="form-group"><label class="form-label">标准回答（每行一条，格式：关键词1,关键词2 => 回答）</label>
+                <textarea class="textarea" id="ai-std" rows="3" placeholder="服务器地址,ip,怎么进 => 服务器地址是 66qnmc.top，端口 25565"></textarea></div>
+            <div class="form-group"><label class="form-label">负责板块</label>
+                <div class="flex" style="gap:1rem;flex-wrap:wrap">${AI_SCOPES.map(s => `<label class="flex-center" style="gap:.35rem"><input type="checkbox" class="ai-scope" value="${s.key}" ${s.key === 'chat' ? 'checked' : ''}> ${s.label}</label>`).join('')}</div></div>
+            <label class="flex-center" style="gap:.35rem;margin-bottom:1rem"><input type="checkbox" id="ai-enabled" checked> 启用</label>
+            <button class="btn btn-primary" onclick="saveAiConfig()">保存配置</button>
+        </div>
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">已配置模型</h3>
+        <div class="card" style="padding:0;overflow:auto">
+            <table class="data-table">
+                <thead><tr><th>名称</th><th>模型</th><th>负责板块</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody>${(configs || []).map(c => `
+                    <tr>
+                        <td>${esc(c.name)}</td>
+                        <td>${esc(c.model || '-')}</td>
+                        <td>${(Array.isArray(c.scopes) ? c.scopes : String(c.scopes || '').replace(/[{}]/g, '').split(',')).filter(Boolean).map(s => esc(s)).join('、') || '-'}</td>
+                        <td>${c.priority}</td>
+                        <td><span class="badge ${c.enabled ? 'badge-green' : 'badge-gray'}">${c.enabled ? '启用' : '停用'}</span></td>
+                        <td>
+                            <button class="btn btn-ghost btn-sm" onclick="testAiConfig('${c.id}')">测试</button>
+                            <button class="btn btn-ghost btn-sm" onclick="toggleAiConfig('${c.id}',${c.enabled ? 'false' : 'true'})">${c.enabled ? '停用' : '启用'}</button>
+                            <button class="btn btn-ghost btn-sm" onclick="deleteAiConfig('${c.id}')">删除</button>
+                        </td>
+                    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">还没有配置模型</td></tr>'}</tbody>
+            </table>
+        </div>`;
+}
+async function saveAiConfig() {
+    const scopes = Array.from(document.querySelectorAll('.ai-scope:checked')).map(x => x.value);
+    const payload = {
+        name: document.getElementById('ai-name').value.trim(),
+        api_url: document.getElementById('ai-url').value.trim(),
+        model: document.getElementById('ai-model').value.trim(),
+        prompt: document.getElementById('ai-prompt').value.trim(),
+        standard_answers: parseStandardAnswers(document.getElementById('ai-std').value),
+        scopes, priority: parseInt(document.getElementById('ai-priority').value) || 10,
+        temperature: Number(document.getElementById('ai-temp').value) || 0.3,
+        enabled: document.getElementById('ai-enabled').checked,
+    };
+    if (!payload.name) return toast('请填写配置名称', 'error');
+    if (!payload.api_url) return toast('请填写 API 地址', 'error');
+    if (!scopes.length) return toast('请至少选择一个负责板块', 'error');
+    const { data, error } = await sb.from('ai_configs').insert(payload).select().maybeSingle();
+    if (error) return toast(errText(error, '保存失败'), 'error');
+    const key = document.getElementById('ai-key').value.trim();
+    if (key) {
+        const { error: kerr } = await sb.rpc('admin_set_ai_key', { p_config: data.id, p_key: key });
+        if (kerr) toast('配置已保存，但密钥写入失败：' + kerr.message, 'error');
+    }
+    toast('AI 配置已保存');
+    renderAdminAi(document.getElementById('admin-content'));
+}
+async function toggleAiConfig(id, enabled) {
+    await sb.from('ai_configs').update({ enabled }).eq('id', id);
+    toast('已更新'); renderAdminAi(document.getElementById('admin-content'));
+}
+async function deleteAiConfig(id) {
+    if (!confirm('确定删除该 AI 配置？')) return;
+    await sb.from('ai_configs').delete().eq('id', id);
+    toast('已删除'); renderAdminAi(document.getElementById('admin-content'));
+}
+async function testAiConfig(id) {
+    toast('正在测试…');
+    const { data, error } = await sb.functions.invoke('ai', { body: { action: 'chat', message: '你好，请回复“测试成功”' } });
+    if (error || data?.error) return toast('测试失败：' + (error?.message || data?.error), 'error');
+    toast('测试成功：' + String(data.reply || '').slice(0, 40));
+}
+
+// ==================== 后台：协议设置 ====================
+async function renderAdminAgreement(el) {
+    const { data } = await sb.from('server_settings').select('value').eq('key', 'legal').maybeSingle();
+    const v = data?.value || {};
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">协议设置</h2>
+        <div class="card">
+            <div class="form-group"><label class="form-label">协议标题</label><input class="input" id="ag-title" value="${esc(v.agreement_title || '服务协议与免责声明')}"></div>
+            <div class="form-group"><label class="form-label">协议正文</label><textarea class="textarea" id="ag-text" rows="12" style="min-height:260px">${esc(v.agreement_text || defaultAgreement())}</textarea></div>
+            <label class="flex-center" style="gap:.35rem;margin-bottom:1rem"><input type="checkbox" id="ag-required" ${v.agreement_required !== false ? 'checked' : ''}> 首次访问必须同意后才能使用</label>
+            <button class="btn btn-primary" onclick="saveAgreement()">保存协议</button>
+        </div>`;
+}
+async function saveAgreement() {
+    const { data } = await sb.from('server_settings').select('value').eq('key', 'legal').maybeSingle();
+    const value = { ...(data?.value || {}), agreement_title: document.getElementById('ag-title').value.trim(), agreement_text: document.getElementById('ag-text').value, agreement_required: document.getElementById('ag-required').checked };
+    const { error } = await sb.from('server_settings').upsert({ key: 'legal', value, updated_at: new Date().toISOString() });
+    if (error) return toast(errText(error, '保存失败'), 'error');
+    AGREEMENT_TEXT = null;
+    toast('协议已保存');
+}
 
 async function renderAdminServer(el) {
     const info = await Settings.load(true);

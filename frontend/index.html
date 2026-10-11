@@ -151,6 +151,49 @@
         .announcement-bar { position: relative; z-index: 90; padding: 0.65rem 1rem; text-align: center; background: #eff6ff; color: #1d4ed8; border-bottom: 1px solid #bfdbfe; font-size: 0.875rem; animation: riseIn .35s ease both; }
         .announcement-bar a { margin-left: .75rem; text-decoration: underline; font-weight: 600; }
 
+        /* ==================== AI 客服悬浮窗 ==================== */
+        .ai-fab {
+            position: fixed; right: 22px; bottom: 22px; z-index: 300;
+            width: 52px; height: 52px; border-radius: 50%;
+            background: var(--color-accent); color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 10px 26px rgba(37,99,235,.34);
+            transition: transform .22s ease, box-shadow .22s ease;
+        }
+        .ai-fab:hover { transform: translateY(-3px) scale(1.05); box-shadow: 0 14px 32px rgba(37,99,235,.42); }
+        .ai-fab::before { content: ''; position: absolute; inset: 0; border-radius: 50%; box-shadow: 0 0 0 0 rgba(37,99,235,.45); animation: softPulse 2.6s ease-out infinite; }
+        .ai-panel {
+            position: fixed; right: 22px; bottom: 86px; z-index: 301;
+            width: min(380px, calc(100vw - 32px)); height: min(560px, 74vh);
+            background: var(--color-bg); border: 1px solid var(--color-border);
+            border-radius: 12px; box-shadow: 0 20px 50px rgba(17,24,39,.16);
+            display: flex; flex-direction: column; overflow: hidden;
+            animation: riseIn .26s ease both;
+        }
+        .ai-panel-head { padding: 0.85rem 1rem; border-bottom: 1px solid var(--color-border-light); display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg,#f8fbff,#eef4ff); }
+        .ai-panel-head strong { font-size: .9375rem; }
+        .ai-panel-head span { font-size: .75rem; color: var(--color-text-tertiary); }
+        .ai-panel-body { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: .75rem; }
+        .ai-msg { max-width: 84%; padding: .6rem .85rem; border-radius: 10px; font-size: .875rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; animation: riseIn .22s ease both; }
+        .ai-msg-bot { align-self: flex-start; background: var(--color-bg-tertiary); }
+        .ai-msg-me { align-self: flex-end; background: var(--color-accent); color: #fff; }
+        .ai-panel-foot { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--color-border-light); }
+        .ai-panel-foot .input { flex: 1; }
+        .ai-hint { font-size: .75rem; color: var(--color-text-tertiary); padding: .5rem .25rem; }
+
+        /* ==================== 协议弹窗 ==================== */
+        .agree-overlay { position: fixed; inset: 0; background: rgba(15,23,42,.55); backdrop-filter: blur(3px); z-index: 400; display: flex; align-items: center; justify-content: center; padding: 1rem; animation: fadeIn .2s ease; }
+        .agree-card { background: var(--color-bg); border-radius: 12px; width: min(620px, 100%); max-height: 86vh; display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(15,23,42,.3); animation: riseIn .3s ease both; }
+        .agree-head { padding: 1.1rem 1.4rem; border-bottom: 1px solid var(--color-border-light); font-weight: 600; }
+        .agree-body { padding: 1.1rem 1.4rem; overflow-y: auto; font-size: .875rem; line-height: 1.8; color: var(--color-text-secondary); }
+        .agree-foot { padding: 1rem 1.4rem; border-top: 1px solid var(--color-border-light); display: flex; gap: .75rem; justify-content: flex-end; }
+
+        /* ==================== 上传预览 ==================== */
+        .upload-drop { border: 1px dashed var(--color-border); border-radius: 8px; padding: 1rem; text-align: center; color: var(--color-text-tertiary); font-size: .875rem; transition: border-color .2s, background .2s; }
+        .upload-drop:hover { border-color: var(--color-accent); background: #f8fbff; }
+        .thumb-preview { margin-top: .75rem; display: flex; align-items: center; gap: .75rem; }
+        .thumb-preview img { width: 92px; height: 92px; object-fit: cover; border-radius: 8px; border: 1px solid var(--color-border); }
+
         /* ==================== Page: Home ==================== */
         .hero {
             padding: var(--space-20) 0 var(--space-16);
@@ -405,6 +448,9 @@
         <div class="navbar-nav" id="desktop-nav">
             <a href="#/" class="nav-link" data-route="/">首页</a>
             <a href="#/launcher" class="nav-link" data-route="/launcher">启动器</a>
+            <a href="#/commands" class="nav-link" data-route="/commands">指令</a>
+            <a href="#/events" class="nav-link" data-route="/events">活动</a>
+            <a href="#/records" class="nav-link" data-route="/records">实录</a>
             <a href="#/forum" class="nav-link" data-route="/forum">社区</a>
             <a href="#/messages" class="nav-link" data-route="/messages">私信</a>
         </div>
@@ -429,15 +475,35 @@
 <footer class="footer">
     <div class="container">
         <div class="footer-content">
-            <span>&copy; 2024-2026 66qn Server. All rights reserved.</span>
+            <span>66qn 玩家社区 · 非官方站点，与 Mojang / Microsoft 无关联</span>
             <div class="footer-links">
                 <a href="https://qm.qq.com/q/bZNAGK8Rs4" target="_blank" rel="noopener">QQ群</a>
                 <a href="https://space.bilibili.com/3546783978359356" target="_blank" rel="noopener">B站</a>
+                <a href="https://gaox.s.gy/66qn" target="_blank" rel="noopener">地标总览</a>
+                <a href="#/agreement">服务协议</a>
                 <a href="#/launcher">启动器下载</a>
             </div>
         </div>
     </div>
 </footer>
+
+<!-- AI 客服 -->
+<button class="ai-fab" id="ai-fab" onclick="toggleAiPanel()" aria-label="AI 客服">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+</button>
+<div class="ai-panel" id="ai-panel" style="display:none">
+    <div class="ai-panel-head">
+        <div><strong>66qn AI 客服</strong><br><span>服务器相关问题都可以问我</span></div>
+        <button class="btn btn-ghost btn-sm" onclick="toggleAiPanel()">关闭</button>
+    </div>
+    <div class="ai-panel-body" id="ai-body">
+        <div class="ai-msg ai-msg-bot">你好，我是 66qn 的 AI 客服。可以问我服务器地址、版本、玩法、指令等问题。</div>
+    </div>
+    <div class="ai-panel-foot">
+        <input class="input" id="ai-input" placeholder="输入你的问题…" onkeydown="if(event.key==='Enter')askAi()">
+        <button class="btn btn-primary btn-sm" onclick="askAi()">发送</button>
+    </div>
+</div>
 
 <!-- Supabase SDK + 配置 + 应用逻辑 -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
