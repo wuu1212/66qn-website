@@ -8,7 +8,8 @@
 // 安全：API Key 加密存放在 public.ai_secrets，仅本函数（service_role）可解密，
 //       浏览器永远拿不到密钥。
 // 部署：Supabase 控制台 → Edge Functions → 新建函数 ai → 粘贴本文件 → Deploy
-//       需要在 Edge Function 的 Secrets 中设置 AI_SECRET（与数据库 app.ai_secret 相同）
+//       并在 Edge Function 的 Secrets 中设置 AI_SECRET，
+//       其值必须与数据库 public.app_secrets 表中 key='ai_secret' 的值完全一致
 // ============================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
