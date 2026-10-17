@@ -649,7 +649,8 @@ async function renderMembers(app) {
 
     const [live, memberRes] = await Promise.all([
         fetchServerStatus(s.ip, s.port),
-        sb.from('members').select('*').eq('enabled', true).order('sort_order', { ascending: true }).order('created_at', { ascending: true }),
+        // 成员来源为所有已注册用户，不再依赖单独 members 表；撤销资格用户不展示
+        sb.from('profiles').select('id,username,game_id,avatar_url,role,bio,status,created_at').neq('status', 'banned').order('created_at', { ascending: true }),
     ]);
 
     const members = memberRes.data || [];
@@ -676,8 +677,8 @@ async function renderMembers(app) {
         <p class="text-secondary mb-8" style="font-size:.875rem">${esc(summary)}</p>
         <div class="grid-3">
             ${members.map(m => {
-                const name = String(m.name || '').trim();
-                const label = m.display_name || name;
+                const name = String(m.game_id || m.username || '').trim();
+                const label = m.username || name;
                 let badge = '<span class="badge badge-gray">状态未知</span>';
                 if (onlineNames) {
                     badge = onlineSet.has(name.toLowerCase())
@@ -692,11 +693,11 @@ async function renderMembers(app) {
                             : `<div class="member-avatar member-avatar-fallback">${esc(label.slice(0, 1).toUpperCase())}</div>`}
                         <div style="min-width:0">
                             <div class="member-name">${esc(label)}</div>
-                            <div class="member-role">${esc(m.role || '成员')}</div>
+                            <div class="member-role">${esc(m.role === 'admin' ? '管理员' : '成员')}</div>
                         </div>
                     </div>
                     <div style="margin-top:.6rem">${badge}</div>
-                    ${m.description ? `<p class="text-secondary" style="font-size:.8125rem;margin-top:.6rem">${esc(m.description)}</p>` : ''}
+                    ${m.bio ? `<p class="text-secondary" style="font-size:.8125rem;margin-top:.6rem">${esc(m.bio)}</p>` : ''}
                     <div class="text-tertiary" style="font-size:.75rem;margin-top:.5rem">游戏 ID：${esc(name)}</div>
                 </div>`;
             }).join('')}
@@ -1325,10 +1326,20 @@ async function doLogin() {
         if (profile.status === 'banned') return toast('该账户已被撤销注册资格', 'error');
         email = profile.email;
     }
-    if (!requireAgreement()) return;
+    // 先让 Supabase Auth 验证邮箱和密码；协议检查不能放在这里之前，
+    // 否则首次登录用户永远无法完成登录并同意协议。
     const { error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) return toast('邮箱或密码错误', 'error');
+    if (error) {
+        const msg = /email not confirmed/i.test(error.message || '')
+            ? '邮箱尚未验证，请先查收确认邮件并点击链接'
+            : '邮箱或密码错误，请检查后重试';
+        return toast(msg, 'error');
+    }
     await APP.loadProfile((await sb.auth.getUser()).data.user.id);
+    if (!(await checkAgreement())) {
+        await showAgreementModal(true);
+        return;
+    }
     toast('登录成功');
     location.hash = '#/';
 }
