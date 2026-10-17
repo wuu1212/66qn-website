@@ -120,6 +120,7 @@ const APP = {
                 break;
             case '/login': renderLogin(app); break;
             case '/register': renderRegister(app); break;
+            case '/verify': renderVerify(app, params[0] ? decodeURIComponent(params[0]) : ''); break;
             case '/profile': renderProfile(app, params[0] || (this.user && this.user.id)); break;
             case '/admin':
                 if (!this.isAdmin) { toast('需要管理员权限', 'error'); location.hash = '#/'; return; }
@@ -552,17 +553,10 @@ async function renderHome(app) {
     const live = await fetchServerStatus(s.ip, s.port);
     const liveOk = !!(live && !live.error && !live.offline);
 
-    // 玩法特色：优先取后台配置，未配置时使用默认四项
+    // 玩法特色：只显示后台配置的内容，没有配置就显示提示，不预设默认项
     const { data: feats } = await sb.from('game_features').select('*').eq('enabled', true).order('sort_order', { ascending: true }).limit(12);
     const iconPool = [icons.cube, icons.heart, icons.shield, icons.users];
-    const featureCards = (feats && feats.length)
-        ? feats.map((f, i) => ({ icon: iconPool[i % iconPool.length], title: f.title, desc: f.description || '' }))
-        : [
-            { icon: icons.cube, title: '纯净原版', desc: '不添加任何模组和插件，保留 Minecraft 最原汁原味的生存体验。' },
-            { icon: icons.heart, title: '友善社区', desc: '玩家之间互帮互助，共同打造一个温暖的游戏社区。' },
-            { icon: icons.shield, title: '长期稳定', desc: '服务器 7x24 小时运行，数据定期备份，永不删档。' },
-            { icon: icons.users, title: '自由建造', desc: '广阔的世界等你探索，建造属于你的梦想家园。' },
-        ];
+    const featureCards = (feats || []).map((f, i) => ({ icon: iconPool[i % iconPool.length], title: f.title, desc: f.description || '' }));
 
     app.innerHTML = `
     <div class="container">
@@ -601,7 +595,9 @@ async function renderHome(app) {
         <section class="section">
             <h2 class="section-title text-center">玩法特色</h2>
             <div class="grid-4">
-                ${featureCards.map(f => `<div class="card feature-card"><div class="feature-icon">${f.icon}</div><h3>${esc(f.title)}</h3><p>${esc(f.desc)}</p></div>`).join('')}
+                ${featureCards.length
+                    ? featureCards.map(f => `<div class="card feature-card"><div class="feature-icon">${f.icon}</div><h3>${esc(f.title)}</h3><p>${esc(f.desc)}</p></div>`).join('')
+                    : '<p class="text-secondary text-center" style="grid-column:1/-1">管理员还没有配置玩法特色</p>'}
             </div>
         </section>
         <section class="section">
@@ -687,7 +683,7 @@ async function renderMembers(app) {
                 }
                 return `
                 <div class="card member-card">
-                    <div class="member-top">
+                    <a href="#/profile/${m.id}" class="member-top" style="color:inherit">
                         ${m.avatar_url
                             ? `<img src="${esc(m.avatar_url)}" alt="" class="member-avatar" onerror="this.style.display='none'">`
                             : `<div class="member-avatar member-avatar-fallback">${esc(label.slice(0, 1).toUpperCase())}</div>`}
@@ -695,10 +691,14 @@ async function renderMembers(app) {
                             <div class="member-name">${esc(label)}</div>
                             <div class="member-role">${esc(m.role === 'admin' ? '管理员' : '成员')}</div>
                         </div>
-                    </div>
+                    </a>
                     <div style="margin-top:.6rem">${badge}</div>
                     ${m.bio ? `<p class="text-secondary" style="font-size:.8125rem;margin-top:.6rem">${esc(m.bio)}</p>` : ''}
                     <div class="text-tertiary" style="font-size:.75rem;margin-top:.5rem">游戏 ID：${esc(name)}</div>
+                    <div style="display:flex;gap:.5rem;margin-top:.75rem">
+                        <a href="#/profile/${m.id}" class="btn btn-secondary btn-sm">查看主页</a>
+                        ${APP.user && APP.user.id !== m.id ? `<a href="#/messages/${m.id}" class="btn btn-ghost btn-sm">发私信</a>` : ''}
+                    </div>
                 </div>`;
             }).join('')}
         </div>`;
@@ -1312,6 +1312,7 @@ function renderLogin(app) {
             <input class="input" id="login-password" type="password" placeholder="输入密码"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doLogin()">登录</button>
         <p class="auth-link">还没有账号？<a href="#/register">注册</a></p>
+        <p class="auth-link">已注册但没收到验证码？<a href="#/verify">去验证邮箱</a></p>
     </div>`;
 }
 
@@ -1402,16 +1403,69 @@ async function doRegister() {
     if (registerReason.length < 5) return toast('请填写注册原因（至少5个字符）', 'error');
     if (password.length < 6) return toast('密码至少6位', 'error');
 
-    const { data, error } = await sb.auth.signUp({ email, password, options: { data: { username, game_id: gameId, register_reason: registerReason } } });
+    const redirectTo = location.origin + location.pathname + '#/verify';
+    const { data, error } = await sb.auth.signUp({
+        email, password,
+        options: { emailRedirectTo: redirectTo, data: { username, game_id: gameId, register_reason: registerReason } },
+    });
     if (error) return toast(errText(error, '注册失败'), 'error');
+
     if (data.session) {
+        // Confirm Email 关闭时直接登录
         await APP.loadProfile(data.user.id);
         toast('注册成功，欢迎！');
         location.hash = '#/';
     } else {
-        toast('注册成功！请前往邮箱完成验证', 'success');
+        // Confirm Email 开启：跳转到验证码输入页
+        toast('验证码已发送到邮箱', 'success');
+        location.hash = '#/verify';
+    }
+}
+
+// ==================== 页面：邮箱验证 ====================
+function renderVerify(app, email) {
+    const mail = email || sessionStorage.getItem('66qn_verify_email') || '';
+    sessionStorage.setItem('66qn_verify_email', mail);
+    app.innerHTML = `
+    <div class="container" style="max-width:460px;margin:0 auto;padding:var(--space-16) var(--space-6)">
+        <h1 class="auth-title">邮箱验证</h1>
+        <p class="auth-subtitle">我们已向 <strong>${esc(mail || '你的邮箱')}</strong> 发送了一封验证码邮件，请在下方输入验证码完成注册。</p>
+        <div class="form-group">
+            <label class="form-label">验证码</label>
+            <input class="input" id="verify-code" placeholder="邮件中的 6-8 位验证码" maxlength="12" autocomplete="one-time-code">
+        </div>
+        <button class="btn btn-primary btn-lg" style="width:100%" onclick="submitVerify()">验证并登录</button>
+        <div class="auth-link">
+            <a href="javascript:void(0)" onclick="resendVerify()">没有收到验证码？重新发送</a>
+        </div>
+        <div class="auth-link">验证完成后即可<a href="#/login">去登录</a></div>
+    </div>`;
+}
+
+async function submitVerify() {
+    const email = sessionStorage.getItem('66qn_verify_email') || '';
+    const token = document.getElementById('verify-code').value.trim();
+    if (!email) return toast('邮箱已丢失，请重新注册', 'error');
+    if (!token) return toast('请输入邮件中的验证码', 'error');
+    const { data, error } = await sb.auth.verifyOtp({ email, token, type: 'signup' });
+    if (error) return toast('验证码错误或已过期：' + error.message, 'error');
+    sessionStorage.removeItem('66qn_verify_email');
+    if (data.session) {
+        await APP.loadProfile(data.session.user.id);
+        toast('验证成功，欢迎加入！');
+        location.hash = '#/';
+    } else {
+        toast('验证成功，请登录', 'success');
         location.hash = '#/login';
     }
+}
+
+async function resendVerify() {
+    const email = sessionStorage.getItem('66qn_verify_email') || '';
+    if (!email) return toast('邮箱已丢失，请重新注册', 'error');
+    const { error } = await sb.auth.resend({ type: 'signup', email });
+    if (error) return toast('重新发送失败：' + error.message, 'error');
+    toast('验证码已重新发送，请查收邮件');
 }
 
 // ==================== 页面：个人主页 ====================
