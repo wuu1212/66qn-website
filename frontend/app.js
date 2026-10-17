@@ -58,6 +58,7 @@ const APP = {
         if (error) { toast('登录会话读取失败，请刷新重试', 'error'); }
         if (session) await this.loadProfile(session.user.id);
         this.route();
+        autoClaimDailyPower();   // 登录后按天发放每日电力，数据库层去重
     },
     async loadProfile(uid) {
         let { data } = await sb.from('profiles').select('*').eq('id', uid).maybeSingle();
@@ -106,6 +107,7 @@ const APP = {
             case '/launcher': renderDownload(app); break;
             case '/commands': renderCommands(app); break;
             case '/members': renderMembers(app); break;
+            case '/power': renderPower(app); break;
             case '/events': renderEvents(app, params[0]); break;
             case '/records': renderRecords(app); break;
             case '/agreement': renderAgreementPage(app); break;
@@ -204,6 +206,7 @@ function toggleMobileNav() {
     nav.innerHTML = `
         <a href="#/" class="nav-link" onclick="toggleMobileNav()">首页</a>
         <a href="#/download" class="nav-link" onclick="toggleMobileNav()">下载</a>
+        <a href="#/power" class="nav-link" onclick="toggleMobileNav()">电力</a>
         <a href="#/members" class="nav-link" onclick="toggleMobileNav()">成员</a>
         <a href="#/commands" class="nav-link" onclick="toggleMobileNav()">指令</a>
         <a href="#/events" class="nav-link" onclick="toggleMobileNav()">活动</a>
@@ -704,7 +707,84 @@ async function renderMembers(app) {
         </div>`;
 }
 
+// ==================== 页面：电力 ====================
+const POWER_NOTICE = '当前暂未开通电力兑换，但是后期会开放，大家可以先积攒电力，后期兑换。';
 
+async function renderPower(app) {
+    if (!requireLogin()) return;
+    app.innerHTML = `<div class="container" style="max-width:760px;padding:var(--space-12) var(--space-6)" id="power-page">${loadingBlock()}</div>`;
+
+    document.getElementById('power-page').innerHTML = `
+        <h1 class="section-title">电力</h1>
+        <div class="power-notice mb-8">${esc(POWER_NOTICE)}</div>
+
+        <div class="power-hero mb-8">
+            <div class="power-value" id="power-now">…</div>
+            <div class="power-unit">当前电力</div>
+            <div style="margin-top:1.25rem">
+                <button class="btn btn-primary btn-lg" id="power-claim-btn" onclick="claimDailyPower()">每日签到领取 100 电力</button>
+            </div>
+            <p class="text-tertiary" style="margin-top:.75rem;font-size:.8125rem">每天可领一次，新用户注册赠送 5000 电力</p>
+        </div>
+
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">获取规则</h3>
+        <div class="power-rules mb-8">
+            <div class="card"><div class="form-label">每日登录</div><p class="text-secondary" style="font-size:.875rem">每天首次签到获得 <strong>100</strong> 电力</p></div>
+            <div class="card"><div class="form-label">新用户注册</div><p class="text-secondary" style="font-size:.875rem">完成注册获得 <strong>5000</strong> 电力（一次性）</p></div>
+        </div>
+
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">电力明细</h3>
+        <div class="card" style="padding:0;overflow:hidden" id="power-log-list">${loadingBlock()}</div>`;
+
+    await refreshPowerPanel();
+}
+
+async function refreshPowerPanel() {
+    const nowEl = document.getElementById('power-now');
+    const listEl = document.getElementById('power-log-list');
+    if (!nowEl || !listEl) return;
+
+    const [{ data: profile }, { data: logs }] = await Promise.all([
+        sb.from('profiles').select('power').eq('id', APP.user.id).maybeSingle(),
+        sb.from('power_logs').select('*').eq('user_id', APP.user.id).order('created_at', { ascending: false }).limit(50),
+    ]);
+
+    nowEl.textContent = String((profile && profile.power) || 0);
+    const todayKey = new Date().toLocaleDateString('sv-SE');   // YYYY-MM-DD（本地时区）
+    const claimed = (logs || []).some(l => l.kind === 'daily' && String(l.created_at).slice(0, 10) === todayKey);
+    const btn = document.getElementById('power-claim-btn');
+    if (btn) {
+        btn.disabled = claimed;
+        btn.textContent = claimed ? '今日已签到' : '每日签到领取 100 电力';
+    }
+
+    const KIND = { newuser: '新用户注册', daily: '每日登录', admin: '管理员调整', manual: '其他' };
+    listEl.innerHTML = (logs || []).length
+        ? `<table class="data-table"><thead><tr><th>时间</th><th>类型</th><th>数量</th><th>说明</th></tr></thead>
+           <tbody>${logs.map(l => `<tr>
+                <td class="text-tertiary">${new Date(l.created_at).toLocaleString('zh-CN')}</td>
+                <td>${esc(KIND[l.kind] || l.kind)}</td>
+                <td style="font-weight:600;color:${l.amount >= 0 ? 'var(--color-success)' : 'var(--color-danger)'}">${l.amount >= 0 ? '+' : ''}${l.amount}</td>
+                <td class="text-tertiary">${esc(l.note || '')}</td></tr>`).join('')}</tbody></table>`
+        : '<div style="padding:1.5rem;text-align:center;color:var(--color-text-tertiary)">暂无记录</div>';
+}
+
+async function claimDailyPower() {
+    if (!requireLogin()) return;
+    const { data, error } = await sb.rpc('claim_daily_power');
+    if (error) return toast(errText(error, '签到失败'), 'error');
+    if (!data) { toast('今天已经签到过了'); await refreshPowerPanel(); return; }
+    toast('签到成功，获得 ' + data + ' 电力');
+    await refreshPowerPanel();
+}
+
+// 登录后自动尝试一次每日签到（数据库层按北京时间去重，重复调用不会多发）
+async function autoClaimDailyPower() {
+    if (!APP.user) return;
+    try { await sb.rpc('claim_daily_power'); } catch { /* 静默失败 */ }
+}
+
+// ==================== 页面：活动 ====================
 async function renderEvents(app, eventId) {
     if (eventId) return renderEventDetail(app, eventId);
     app.innerHTML = `<div class="container" style="max-width:860px;padding:var(--space-12) var(--space-6)"><h1 class="section-title">服务器活动</h1><div class="card" id="event-list">${loadingBlock()}</div></div>`;
@@ -1384,6 +1464,8 @@ function renderRegister(app) {
             <input class="input" id="reg-game-id" placeholder="你的 Minecraft 游戏 ID" maxlength="32"></div>
         <div class="form-group"><label class="form-label">注册原因</label>
             <textarea class="textarea" id="reg-reason" rows="3" maxlength="500" placeholder="简单介绍你为什么想加入 66qn"></textarea></div>
+        <div class="form-group"><label class="form-label">邀请码 <span class="text-tertiary">(必填)</span></label>
+            <input class="input" id="reg-invite" placeholder="请输入管理员提供的邀请码" maxlength="32" autocomplete="off"></div>
         <div class="form-group"><label class="form-label">密码 <span class="text-tertiary">(至少6位)</span></label>
             <input class="input" id="reg-password" type="password" placeholder="设置密码"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doRegister()">注册</button>
@@ -1397,11 +1479,18 @@ async function doRegister() {
     const gameId = document.getElementById('reg-game-id').value.trim();
     const registerReason = document.getElementById('reg-reason').value.trim();
     const password = document.getElementById('reg-password').value;
+    const inviteCode = document.getElementById('reg-invite').value.trim();
     if (username.length < 3 || username.length > 20) return toast('用户名需3-20个字符', 'error');
     if (!email.includes('@')) return toast('请输入有效的邮箱地址', 'error');
     if (gameId.length < 2) return toast('请填写游戏 ID', 'error');
     if (registerReason.length < 5) return toast('请填写注册原因（至少5个字符）', 'error');
     if (password.length < 6) return toast('密码至少6位', 'error');
+    if (!inviteCode) return toast('请输入邀请码', 'error');
+
+    // 先校验邀请码是否可用，通过后才允许注册
+    const { data: codeOk, error: codeErr } = await sb.rpc('check_invite_code', { p_code: inviteCode });
+    if (codeErr) return toast('邀请码校验失败，请稍后重试', 'error');
+    if (!codeOk) return toast('邀请码无效或已被使用', 'error');
 
     // 邮件里的确认链接点击后回到首页（SDK 会自动完成登录）；验证码则在 #/verify 页面输入
     const redirectTo = location.origin + location.pathname + '#/';
@@ -1411,13 +1500,22 @@ async function doRegister() {
     });
     if (error) return toast(errText(error, '注册失败'), 'error');
 
+    // 注册成功，立即核销邀请码（已开启 Confirm Email 时在验证通过后再核销）
+    const finish = async () => {
+        if (sessionStorage.getItem('66qn_invite') === inviteCode.toUpperCase()) return;
+        sessionStorage.setItem('66qn_invite', inviteCode.toUpperCase());
+        const { error: ue } = await sb.rpc('use_invite_code', { p_code: inviteCode });
+        if (ue) console.warn('邀请码核销失败', ue.message);
+    };
+
     if (data.session) {
-        // Confirm Email 关闭时直接登录
         await APP.loadProfile(data.user.id);
-        toast('注册成功，欢迎！');
-        location.hash = '#/';
+        await finish();
+        toast('注册成功，新用户赠送 5000 电力！');
+        location.hash = '#/power';
     } else {
-        // Confirm Email 开启：跳转到验证码输入页
+        // Confirm Email 开启：先验证邮箱，验证通过后再核销邀请码
+        sessionStorage.setItem('66qn_pending_invite', inviteCode);
         toast('验证码已发送到邮箱', 'success');
         location.hash = '#/verify';
     }
@@ -1453,6 +1551,12 @@ async function submitVerify() {
     sessionStorage.removeItem('66qn_verify_email');
     if (data.session) {
         await APP.loadProfile(data.session.user.id);
+        // 邮箱验证通过后核销邀请码
+        const pendingInvite = sessionStorage.getItem('66qn_pending_invite');
+        if (pendingInvite) {
+            sessionStorage.removeItem('66qn_pending_invite');
+            await sb.rpc('use_invite_code', { p_code: pendingInvite });
+        }
         toast('验证成功，欢迎加入！');
         location.hash = '#/';
     } else {
@@ -1531,6 +1635,7 @@ async function renderAdmin(app, sub) {
         { key: 'features', label: '玩法特色', icon: icons.cube },
         { key: 'commands', label: '服务器指令', icon: icons.settings },
         { key: 'members', label: '成员管理', icon: icons.users },
+        { key: 'invites', label: '邀请码管理', icon: icons.flag },
         { key: 'mods', label: '模组管理', icon: icons.download },
         { key: 'events', label: '活动管理', icon: icons.users },
         { key: 'records', label: '游戏实录', icon: icons.download },
@@ -1555,6 +1660,7 @@ async function renderAdmin(app, sub) {
         case 'features': renderAdminTable(content, 'game_features'); break;
         case 'commands': renderAdminTable(content, 'server_commands'); break;
         case 'members': renderAdminTable(content, 'members'); break;
+        case 'invites': renderAdminInvites(content); break;
         case 'mods': renderAdminMods(content); break;
         case 'events': renderAdminEvents(content); break;
         case 'records': renderAdminRecords(content); break;
@@ -2044,6 +2150,78 @@ async function deleteMod(id) {
     if (error) return toast(errText(error, '删除失败'), 'error');
     toast('已删除');
     renderAdminMods(document.getElementById('admin-content'));
+}
+
+// ==================== 后台：邀请码管理 ====================
+function makeInviteCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let out = '';
+    for (let i = 0; i < 8; i++) out += chars[Math.floor(Math.random() * chars.length)];
+    return out;
+}
+
+async function renderAdminInvites(el) {
+    const { data: codes } = await sb.from('invite_codes').select('*').order('created_at', { ascending: false }).limit(300);
+    const unused = (codes || []).filter(c => c.enabled && !c.used_by).length;
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-4)">邀请码管理</h2>
+        <p class="text-secondary mb-8" style="font-size:.875rem">开启邀请码注册后，新用户必须填写有效邀请码才能注册。当前可用邀请码：<strong>${unused}</strong> 个。</p>
+        <div class="card mb-8">
+            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">生成邀请码</h3>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">生成数量</label><input class="input" id="inv-count" type="number" value="10" min="1" max="100"></div>
+                <div class="form-group"><label class="form-label">备注（可选）</label><input class="input" id="inv-note" placeholder="例如 第一批发放" maxlength="60"></div>
+            </div>
+            <button class="btn btn-primary" onclick="generateInviteCodes()">生成邀请码</button>
+        </div>
+        <div class="card" style="padding:0;overflow:auto">
+            <table class="data-table">
+                <thead><tr><th>邀请码</th><th>状态</th><th>备注</th><th>使用者</th><th>使用时间</th><th>操作</th></tr></thead>
+                <tbody>${(codes || []).map(c => `
+                    <tr>
+                        <td><code style="font-size:.9375rem;font-weight:600;letter-spacing:.05em">${esc(c.code)}</code></td>
+                        <td>${c.used_by
+                            ? '<span class="badge badge-gray">已使用</span>'
+                            : (c.enabled ? '<span class="badge badge-green">可用</span>' : '<span class="badge badge-red">已停用</span>')}</td>
+                        <td class="text-tertiary">${esc(c.note || '')}</td>
+                        <td class="text-tertiary">${c.used_by ? String(c.used_by).slice(0, 8) : '—'}</td>
+                        <td class="text-tertiary">${c.used_at ? new Date(c.used_at).toLocaleString('zh-CN') : '—'}</td>
+                        <td>
+                            <button class="btn btn-ghost btn-sm" onclick="toggleInviteCode('${c.id}',${c.enabled ? 'false' : 'true'})">${c.enabled ? '停用' : '启用'}</button>
+                            <button class="btn btn-ghost btn-sm" onclick="copyInviteCode('${c.code}')">复制</button>
+                            <button class="btn btn-ghost btn-sm" onclick="deleteInviteCode('${c.id}')">删除</button>
+                        </td>
+                    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">还没有邀请码，请在上方生成</td></tr>'}</tbody>
+            </table>
+        </div>`;
+}
+
+async function generateInviteCodes() {
+    const count = Math.max(1, Math.min(100, parseInt(document.getElementById('inv-count').value) || 10));
+    const note = document.getElementById('inv-note').value.trim();
+    const rows = [];
+    for (let i = 0; i < count; i++) rows.push({ code: makeInviteCode(), note, enabled: true });
+    const { error } = await sb.from('invite_codes').insert(rows);
+    if (error) return toast(errText(error, '生成失败'), 'error');
+    toast('已生成 ' + count + ' 个邀请码');
+    renderAdminInvites(document.getElementById('admin-content'));
+}
+
+async function toggleInviteCode(id, enabled) {
+    await sb.from('invite_codes').update({ enabled }).eq('id', id);
+    toast(enabled ? '已启用' : '已停用');
+    renderAdminInvites(document.getElementById('admin-content'));
+}
+
+function copyInviteCode(code) {
+    navigator.clipboard.writeText(code).then(() => toast('邀请码已复制：' + code)).catch(() => prompt('请手动复制邀请码：', code));
+}
+
+async function deleteInviteCode(id) {
+    if (!confirm('确定删除该邀请码？')) return;
+    await sb.from('invite_codes').delete().eq('id', id);
+    toast('已删除');
+    renderAdminInvites(document.getElementById('admin-content'));
 }
 
 // ==================== 后台：游戏实录审核 ====================
