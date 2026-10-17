@@ -200,6 +200,14 @@
         /* ==================== 下载页 ==================== */
         .dl-section-title { font-size: 1.125rem; font-weight: 600; margin-bottom: var(--space-4); padding-left: .65rem; border-left: 3px solid var(--color-accent); line-height: 1.2; }
 
+        /* ==================== 成员页 ==================== */
+        .member-card { padding: var(--space-5); }
+        .member-top { display: flex; align-items: center; gap: .75rem; }
+        .member-avatar { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; flex-shrink: 0; border: 1px solid var(--color-border); }
+        .member-avatar-fallback { display: flex; align-items: center; justify-content: center; background: var(--color-bg-tertiary); color: var(--color-text-secondary); font-weight: 600; font-size: 1.125rem; }
+        .member-name { font-size: 1rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .member-role { font-size: .8125rem; color: var(--color-text-secondary); }
+
         /* ==================== Page: Home ==================== */
         .hero {
             padding: var(--space-20) 0 var(--space-16);
@@ -454,6 +462,7 @@
         <div class="navbar-nav" id="desktop-nav">
             <a href="#/" class="nav-link" data-route="/">首页</a>
             <a href="#/download" class="nav-link" data-route="/download">下载</a>
+            <a href="#/members" class="nav-link" data-route="/members">成员</a>
             <a href="#/commands" class="nav-link" data-route="/commands">指令</a>
             <a href="#/events" class="nav-link" data-route="/events">活动</a>
             <a href="#/records" class="nav-link" data-route="/records">实录</a>
@@ -514,8 +523,8 @@
 
 <!-- Supabase SDK + 配置 + 应用逻辑 -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="config.js?v=20261011h"></script>
-<script src="app.js?v=20261011h"></script>
+<script src="config.js?v=20261011i"></script>
+<script src="app.js?v=20261011i"></script>
 
 </body>
 </html>
