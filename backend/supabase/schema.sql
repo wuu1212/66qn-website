@@ -134,7 +134,7 @@ returns trigger language plpgsql security definer set search_path = public as $$
 declare new_id uuid;
 declare gift integer := 5000;
 begin
-  insert into public.profiles (id, username, email, game_id, register_reason, avatar_url, power)
+  insert into public.profiles (id, username, email, game_id, register_reason, avatar_url, power, invite_code)
   values (
     new.id,
     coalesce(
@@ -146,7 +146,8 @@ begin
     new.raw_user_meta_data->>'game_id',
     new.raw_user_meta_data->>'register_reason',
     new.raw_user_meta_data->>'avatar_url',
-    gift
+    gift,
+    public.gen_invite_code()
   )
   on conflict (id) do nothing
   returning id into new_id;
@@ -555,6 +556,10 @@ create policy "members_admin" on public.members for all using (public.is_admin()
 -- 21. 电力系统（每日登录 +100 / 新用户注册 +5000；兑换后期开放）
 -- ============================================================
 alter table public.profiles add column if not exists power integer not null default 0;
+-- 个人邀请码：6 位纯数字，由系统生成，可在电力页更换
+alter table public.profiles add column if not exists invite_code text unique;
+alter table public.profiles add column if not exists invited_by uuid;
+alter table public.profiles add column if not exists invite_count integer not null default 0;
 
 create table if not exists public.power_logs (
   id         uuid primary key default gen_random_uuid(),
@@ -623,46 +628,64 @@ end $$;
 grant execute on function public.admin_add_power(uuid, integer, text) to authenticated;
 
 -- ============================================================
--- 22. 邀请码注册（邀请码表前端不可读，只能通过 RPC 校验与核销）
+-- 22. 个人邀请码（6 位纯数字，注册时选填；填写后双方建立邀请关系）
 -- ============================================================
-create table if not exists public.invite_codes (
-  id         uuid primary key default gen_random_uuid(),
-  code       text unique not null,
-  note       text not null default '',
-  enabled    boolean not null default true,
-  used_by    uuid references public.profiles(id) on delete set null,
-  used_at    timestamptz,
-  created_at timestamptz not null default now()
-);
-alter table public.invite_codes enable row level security;
-drop policy if exists "invite_admin" on public.invite_codes;
-create policy "invite_admin" on public.invite_codes for all
-  using (public.is_admin()) with check (public.is_admin());
+create or replace function public.gen_invite_code()
+returns text language plpgsql as $$
+declare c text;
+begin
+  loop
+    c := lpad((floor(random() * 1000000))::bigint::text, 6, '0');
+    exit when not exists (select 1 from public.profiles where invite_code = c);
+  end loop;
+  return c;
+end $$;
 
--- 校验邀请码是否可用（不泄露任何内容）
-create or replace function public.check_invite_code(p_code text)
-returns boolean language sql security definer set search_path = public as $$
-  select exists (
-    select 1 from public.invite_codes
-    where code = upper(trim(coalesce(p_code, ''))) and enabled = true and used_by is null
-  );
-$$;
-grant execute on function public.check_invite_code(text) to anon, authenticated;
-
--- 注册成功后核销邀请码（绑定到当前用户）
-create or replace function public.use_invite_code(p_code text)
-returns boolean language plpgsql security definer set search_path = public as $$
+-- 生成/更换自己的邀请码
+create or replace function public.regenerate_invite_code()
+returns text language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid();
-declare n integer;
+declare c text;
 begin
   if uid is null then raise exception 'not authorized'; end if;
-  update public.invite_codes
-  set used_by = uid, used_at = now()
-  where code = upper(trim(coalesce(p_code, ''))) and enabled = true and used_by is null;
-  get diagnostics n = row_count;
-  return n > 0;
+  c := public.gen_invite_code();
+  update public.profiles set invite_code = c where id = uid;
+  return c;
 end $$;
-grant execute on function public.use_invite_code(text) to authenticated;
+grant execute on function public.regenerate_invite_code() to authenticated;
+
+-- 注册时绑定邀请人（选填；幂等，重复绑定返回原结果）
+create or replace function public.bind_inviter(p_code text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid();
+declare inviter uuid;
+begin
+  if uid is null then raise exception 'not authorized'; end if;
+  if p_code is null or trim(p_code) = '' then return false; end if;
+
+  if exists (select 1 from public.profiles where id = uid and invited_by is not null) then
+    return exists (
+      select 1 from public.profiles me join public.profiles up on up.id = me.invited_by
+      where me.id = uid and up.invite_code = trim(p_code)
+    );
+  end if;
+
+  select id into inviter from public.profiles
+  where invite_code = trim(p_code) and status <> 'banned';
+
+  if inviter is null or inviter = uid then return false; end if;
+
+  update public.profiles
+  set invited_by = inviter, invite_count = coalesce(invite_count, 0) + 1
+  where id = inviter;
+  return true;
+end $$;
+grant execute on function public.bind_inviter(text) to authenticated;
+
+-- 给自己补一个邀请码（老用户）
+update public.profiles
+set invite_code = public.gen_invite_code()
+where invite_code is null;
 
 -- ============================================================
 -- 完成。部署清单：
