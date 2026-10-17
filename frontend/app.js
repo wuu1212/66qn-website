@@ -93,6 +93,7 @@ const APP = {
         app.innerHTML = '';
         app.className = 'page-enter';
         document.getElementById('mobile-nav').style.display = 'none';
+        stopStatusAutoRefresh();   // 离开首页后停止轮询，避免后台空跑流量
 
         if (!CONFIGURED && route !== '/login' && route !== '/register') {
             app.innerHTML = `<div class="container" style="padding:var(--space-16) var(--space-6);text-align:center">
@@ -555,7 +556,6 @@ async function renderHome(app) {
     const site = info.site || {};
     const live = await fetchServerStatus(s.ip, s.port);
     const liveOk = !!(live && !live.error && !live.offline);
-
     // 玩法特色：只显示后台配置的内容，没有配置就显示提示，不预设默认项
     const { data: feats } = await sb.from('game_features').select('*').eq('enabled', true).order('sort_order', { ascending: true }).limit(12);
     const iconPool = [icons.cube, icons.heart, icons.shield, icons.users];
@@ -572,13 +572,13 @@ async function renderHome(app) {
             </div>
         </section>
         <section class="section" style="padding-top:0">
-            <div class="status-cards">
+            <div class="status-cards" id="status-cards" data-ip="${esc(s.ip || '')}" data-port="${esc(s.port || '25565')}">
                 <div class="card status-card">
-                    <div class="status-card-value">${esc(liveOk ? (live.version || '—') : (live && live.offline ? '离线' : (s.version || '—')))}</div>
+                    <div class="status-card-value" id="st-version">${esc(liveOk ? (live.version || '—') : (live && live.offline ? '离线' : (s.version || '—')))}</div>
                     <div class="status-card-label">游戏版本${liveOk ? '（实时）' : ''}</div>
                 </div>
                 <div class="card status-card">
-                    <div class="status-card-value">${liveOk ? `${live.online}/${live.max ?? esc(s.maxPlayers || 20)}` : (live && live.offline ? '服务器离线' : `${(s.players != null ? s.players : 0)}/${esc(s.maxPlayers || 20)}`)}</div>
+                    <div class="status-card-value" id="st-online">${liveOk ? `${live.online}/${live.max ?? esc(s.maxPlayers || 20)}` : (live && live.offline ? '服务器离线' : `${(s.players != null ? s.players : 0)}/${esc(s.maxPlayers || 20)}`)}</div>
                     <div class="status-card-label">在线人数${liveOk ? '（实时）' : ''}</div>
                 </div>
                 <div class="card status-card">
@@ -586,14 +586,13 @@ async function renderHome(app) {
                     <div class="status-card-label">服务器地址</div>
                 </div>
             </div>
-            ${liveOk ? (live.motd ? `<p class="text-tertiary text-center" style="margin-top:var(--space-3)">${esc(live.motd)}</p>` : '') : `
-            <p class="text-tertiary text-center" style="margin-top:var(--space-3)">
-                ${live && live.error === 'noaddr'
+            <p class="text-tertiary text-center" id="st-note" style="margin-top:var(--space-3)">
+                ${liveOk ? (live.motd ? esc(live.motd) : '') : (live && live.error === 'noaddr'
                     ? '管理员还没有在后台填写服务器地址，当前显示的是默认值'
                     : (live && live.offline
                         ? `探测地址 ${esc(live.tried || '')} 未响应（部分服务器会屏蔽海外探测，玩家仍可能正常进入）`
-                        : `实时状态获取失败，当前显示的是后台手动填写的数值${live && live.tried ? '（探测地址 ' + esc(live.tried) + '）' : ''}`)}
-            </p>`}
+                        : `实时状态获取失败，当前显示的是后台手动填写的数值${live && live.tried ? '（探测地址 ' + esc(live.tried) + '）' : ''}`))}
+            </p>
         </section>
         <section class="section">
             <h2 class="section-title text-center">玩法特色</h2>
@@ -618,6 +617,36 @@ async function renderHome(app) {
             </div>
         </section>
     </div>`;
+
+    startStatusAutoRefresh(s.ip, s.port);
+}
+
+// ==================== 首页状态每 30 秒自动刷新（只刷这两个卡片，不重画页面）====================
+function stopStatusAutoRefresh() {
+    if (window.__statusTimer) { clearInterval(window.__statusTimer); window.__statusTimer = null; }
+}
+
+async function refreshStatusCards(ip, port) {
+    const wrap = document.getElementById('status-cards');
+    if (!wrap) { stopStatusAutoRefresh(); return; }
+    const live = await fetchServerStatus(ip, port);
+    const vEl = document.getElementById('st-version');
+    const oEl = document.getElementById('st-online');
+    const nEl = document.getElementById('st-note');
+    if (!vEl || !oEl) return;
+    if (live && !live.error && !live.offline) {
+        vEl.textContent = live.version || '—';
+        oEl.textContent = `${live.online}/${live.max ?? 20}`;
+        if (nEl) nEl.textContent = live.motd || '';
+    } else if (live && live.offline) {
+        oEl.textContent = '服务器离线';
+    }
+}
+
+function startStatusAutoRefresh(ip, port) {
+    stopStatusAutoRefresh();
+    if (!ip || ip === '待填写') return;
+    window.__statusTimer = setInterval(() => refreshStatusCards(ip, port), 30000);
 }
 
 async function copyAddress() {
@@ -707,6 +736,84 @@ async function renderMembers(app) {
         </div>`;
 }
 
+// ==================== 本地缓存（省流量：先读本地，没有才下载）====================
+// 图片缓存用 IndexedDB（容量大，可存二进制）；列表缓存用 localStorage
+const ImgCache = {
+    dbPromise: null,
+    open() {
+        if (this.dbPromise) return this.dbPromise;
+        this.dbPromise = new Promise((resolve, reject) => {
+            try {
+                const req = indexedDB.open('66qn-cache', 1);
+                req.onupgradeneeded = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains('images')) db.createObjectStore('images');
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            } catch (e) { reject(e); }
+        });
+        return this.dbPromise;
+    },
+    async get(url) {
+        try {
+            const db = await this.open();
+            return await new Promise((res) => {
+                const r = db.transaction('images', 'readonly').objectStore('images').get(url);
+                r.onsuccess = () => res(r.result || null);
+                r.onerror = () => res(null);
+            });
+        } catch { return null; }
+    },
+    async put(url, blob) {
+        try {
+            const db = await this.open();
+            db.transaction('images', 'readwrite').objectStore('images').put(blob, url);
+        } catch { /* 缓存失败不阻塞页面 */ }
+    },
+    /** 有本地缓存就直接用，否则下载一次并写入本地，之后不再重复下载 */
+    async resolve(url) {
+        if (!url) return url;
+        const local = await this.get(url);
+        if (local) return URL.createObjectURL(local);
+        try {
+            const res = await fetch(url, { mode: 'cors' });
+            if (!res.ok) return url;
+            const blob = await res.blob();
+            await this.put(url, blob);
+            return URL.createObjectURL(blob);
+        } catch { return url; }
+    },
+};
+
+/** 给容器里所有带 data-cache-img 的 <img> 套上本地缓存 */
+async function applyImgCache(root) {
+    const imgs = (root || document).querySelectorAll('img[data-cache-img]');
+    for (const img of imgs) {
+        const src = img.getAttribute('src');
+        if (!src) continue;
+        const finalSrc = await ImgCache.resolve(src);
+        if (finalSrc !== src) img.setAttribute('src', finalSrc);
+    }
+}
+
+/** 列表数据缓存：先渲染本地旧数据，再从网络刷新 */
+const ListCache = {
+    read(key) {
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) return null;
+            const obj = JSON.parse(raw);
+            if (!obj || typeof obj.ts !== 'number') return null;
+            return obj;
+        } catch { return null; }
+    },
+    write(key, data) {
+        try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch { /* 超出容量时忽略 */ }
+    },
+    ttl: 30 * 60 * 1000,   // 30 分钟内的本地缓存可直接使用
+};
+
 // ==================== 页面：电力 ====================
 const POWER_NOTICE = '当前暂未开通电力兑换，但是后期会开放，大家可以先积攒电力，后期兑换。';
 
@@ -733,6 +840,19 @@ async function renderPower(app) {
             <div class="card"><div class="form-label">新用户注册</div><p class="text-secondary" style="font-size:.875rem">完成注册获得 <strong>5000</strong> 电力（一次性）</p></div>
         </div>
 
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">我的邀请码</h3>
+        <div class="card mb-8">
+            <p class="text-secondary" style="font-size:.875rem;margin-bottom:.75rem">把邀请码分享给好友，好友注册时填写（选填）即可建立邀请关系。</p>
+            <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+                <div style="font-size:2rem;font-weight:700;letter-spacing:.35em;color:var(--color-accent)" id="my-invite-code">———</div>
+                <span class="badge badge-gray">已邀请 <strong id="my-invite-count">0</strong> 人</span>
+            </div>
+            <div style="display:flex;gap:.5rem;margin-top:1rem">
+                <button class="btn btn-secondary btn-sm" onclick="copyMyInviteCode()">复制邀请码</button>
+                <button class="btn btn-ghost btn-sm" onclick="regenMyInviteCode()">换一个邀请码</button>
+            </div>
+        </div>
+
         <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">电力明细</h3>
         <div class="card" style="padding:0;overflow:hidden" id="power-log-list">${loadingBlock()}</div>`;
 
@@ -745,11 +865,15 @@ async function refreshPowerPanel() {
     if (!nowEl || !listEl) return;
 
     const [{ data: profile }, { data: logs }] = await Promise.all([
-        sb.from('profiles').select('power').eq('id', APP.user.id).maybeSingle(),
+        sb.from('profiles').select('power, invite_code, invite_count').eq('id', APP.user.id).maybeSingle(),
         sb.from('power_logs').select('*').eq('user_id', APP.user.id).order('created_at', { ascending: false }).limit(50),
     ]);
 
     nowEl.textContent = String((profile && profile.power) || 0);
+    const codeEl = document.getElementById('my-invite-code');
+    const countEl = document.getElementById('my-invite-count');
+    if (codeEl) codeEl.textContent = (profile && profile.invite_code) || '———';
+    if (countEl) countEl.textContent = String((profile && profile.invite_count) || 0);
     const todayKey = new Date().toLocaleDateString('sv-SE');   // YYYY-MM-DD（本地时区）
     const claimed = (logs || []).some(l => l.kind === 'daily' && String(l.created_at).slice(0, 10) === todayKey);
     const btn = document.getElementById('power-claim-btn');
@@ -782,6 +906,21 @@ async function claimDailyPower() {
 async function autoClaimDailyPower() {
     if (!APP.user) return;
     try { await sb.rpc('claim_daily_power'); } catch { /* 静默失败 */ }
+}
+
+function copyMyInviteCode() {
+    const code = document.getElementById('my-invite-code')?.textContent || '';
+    if (!code || code === '———') return toast('还没有邀请码', 'error');
+    navigator.clipboard.writeText(code).then(() => toast('邀请码已复制：' + code)).catch(() => prompt('请手动复制邀请码：', code));
+}
+
+async function regenMyInviteCode() {
+    if (!confirm('更换邀请码后，旧邀请码将失效，确定更换？')) return;
+    const { data, error } = await sb.rpc('regenerate_invite_code');
+    if (error) return toast(errText(error, '更换失败'), 'error');
+    const codeEl = document.getElementById('my-invite-code');
+    if (codeEl) codeEl.textContent = data;
+    toast('已生成新邀请码');
 }
 
 // ==================== 页面：活动 ====================
@@ -825,10 +964,11 @@ async function renderEventDetail(app, eventId) {
                 <div style="padding:.85rem 1rem;border-bottom:1px solid var(--color-border-light)">
                     <strong style="font-size:.875rem">${esc(s.user?.username || '玩家')}</strong>
                     <p class="text-secondary" style="font-size:.875rem;margin-top:.25rem">${esc(s.text_content || '')}</p>
-                    ${s.image_url ? `<a href="${esc(s.image_url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="margin-top:.5rem">查看图片</a>` : ''}
+                    ${s.image_url ? `<img src="${esc(s.image_url)}" data-cache-img alt="" loading="lazy" style="width:100%;max-width:220px;height:auto;border-radius:8px;border:1px solid var(--color-border);margin-top:.5rem"><div class="mt-2"><a href="${esc(s.image_url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">查看原图</a></div>` : ''}
                 </div>`).join('') || '<div style="padding:1.5rem;text-align:center;color:var(--color-text-tertiary)">还没有人报名</div>'}
         </div>
     </div>`;
+    applyImgCache(app);
 }
 
 async function previewSignupImage(input) {
@@ -861,8 +1001,24 @@ async function submitSignup(eventId) {
 // ==================== 页面：游戏实录 ====================
 async function renderRecords(app) {
     app.innerHTML = `<div class="container" style="max-width:900px;padding:var(--space-12) var(--space-6)"><h1 class="section-title">游戏实录</h1><div id="rec-body">${loadingBlock()}</div></div>`;
+
+    const CACHE_KEY = '66qn_cache_records_v1';
+    const cached = ListCache.read(CACHE_KEY);
+    const cacheFresh = cached && (Date.now() - cached.ts) < ListCache.ttl;
+
+    if (cacheFresh) {
+        paintRecords(cached.data);
+        return;   // 本地缓存有效，直接使用，不再请求网络
+    }
+
     const { data } = await sb.from('game_records').select('*').eq('status', 'approved').order('created_at', { ascending: false });
+    ListCache.write(CACHE_KEY, data || []);
+    paintRecords(data || []);
+}
+
+function paintRecords(data) {
     const body = document.getElementById('rec-body');
+    if (!body) return;
     body.innerHTML = `
         ${APP.user ? `
         <div class="card mb-8">
@@ -884,15 +1040,16 @@ async function renderRecords(app) {
             <button class="btn btn-primary" style="margin-top:.75rem" onclick="submitRecord()">提交审核</button>
         </div>` : '<p class="text-secondary mb-8">请先登录后上传实录</p>'}
         <div class="grid-3">
-            ${(data || []).map(r => `
+            ${data.map(r => `
                 <div class="card" style="padding:0;overflow:hidden">
-                    <img src="${esc(r.image_url)}" alt="" style="width:100%;height:170px;object-fit:cover" loading="lazy">
+                    <img src="${esc(r.image_url)}" alt="" data-cache-img style="width:100%;height:170px;object-fit:cover" loading="lazy">
                     <div style="padding:.85rem 1rem">
                         <strong style="font-size:.9375rem">${esc(r.player_name)}</strong>
                         <div class="text-tertiary" style="font-size:.8125rem;margin-top:.2rem">${esc(r.coordinates)}</div>
                     </div>
                 </div>`).join('') || '<p class="text-secondary">还没有通过审核的实录</p>'}
         </div>`;
+    applyImgCache(body);
 }
 
 async function previewRecordImage(input) {
@@ -921,6 +1078,7 @@ async function submitRecord() {
     const { error } = await sb.from('game_records').insert({ user_id: APP.user.id, player_name: playerName, coordinates, image_url: imageUrl, status: 'pending' });
     if (error) return toast(errText(error, '提交失败'), 'error');
     window.__recImage = null;
+    localStorage.removeItem('66qn_cache_records_v1');   // 清掉本地缓存，下次进入拉取最新列表
     toast('已提交，等待管理员审核');
     APP.route();
 }
@@ -1464,8 +1622,8 @@ function renderRegister(app) {
             <input class="input" id="reg-game-id" placeholder="你的 Minecraft 游戏 ID" maxlength="32"></div>
         <div class="form-group"><label class="form-label">注册原因</label>
             <textarea class="textarea" id="reg-reason" rows="3" maxlength="500" placeholder="简单介绍你为什么想加入 66qn"></textarea></div>
-        <div class="form-group"><label class="form-label">邀请码 <span class="text-tertiary">(必填)</span></label>
-            <input class="input" id="reg-invite" placeholder="请输入管理员提供的邀请码" maxlength="32" autocomplete="off"></div>
+        <div class="form-group"><label class="form-label">邀请码 <span class="text-tertiary">(选填)</span></label>
+            <input class="input" id="reg-invite" placeholder="如有好友邀请，可填对方的6位邀请码" maxlength="6" autocomplete="off"></div>
         <div class="form-group"><label class="form-label">密码 <span class="text-tertiary">(至少6位)</span></label>
             <input class="input" id="reg-password" type="password" placeholder="设置密码"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doRegister()">注册</button>
@@ -1479,18 +1637,19 @@ async function doRegister() {
     const gameId = document.getElementById('reg-game-id').value.trim();
     const registerReason = document.getElementById('reg-reason').value.trim();
     const password = document.getElementById('reg-password').value;
-    const inviteCode = document.getElementById('reg-invite').value.trim();
     if (username.length < 3 || username.length > 20) return toast('用户名需3-20个字符', 'error');
     if (!email.includes('@')) return toast('请输入有效的邮箱地址', 'error');
     if (gameId.length < 2) return toast('请填写游戏 ID', 'error');
     if (registerReason.length < 5) return toast('请填写注册原因（至少5个字符）', 'error');
     if (password.length < 6) return toast('密码至少6位', 'error');
-    if (!inviteCode) return toast('请输入邀请码', 'error');
-
-    // 先校验邀请码是否可用，通过后才允许注册
-    const { data: codeOk, error: codeErr } = await sb.rpc('check_invite_code', { p_code: inviteCode });
-    if (codeErr) return toast('邀请码校验失败，请稍后重试', 'error');
-    if (!codeOk) return toast('邀请码无效或已被使用', 'error');
+    // 邀请码选填：填了就必须有效，没填直接跳过
+    let inviteCode = document.getElementById('reg-invite').value.trim();
+    if (inviteCode) {
+        if (!/^\d{6}$/.test(inviteCode)) return toast('邀请码为6位数字，请检查后重试', 'error');
+        const { data: codeOk, error: codeErr } = await sb.rpc('bind_inviter', { p_code: inviteCode });
+        if (codeErr) return toast('邀请码校验失败，请稍后重试', 'error');
+        if (!codeOk) return toast('邀请码不存在或无效', 'error');
+    }
 
     // 邮件里的确认链接点击后回到首页（SDK 会自动完成登录）；验证码则在 #/verify 页面输入
     const redirectTo = location.origin + location.pathname + '#/';
@@ -1498,24 +1657,19 @@ async function doRegister() {
         email, password,
         options: { emailRedirectTo: redirectTo, data: { username, game_id: gameId, register_reason: registerReason } },
     });
-    if (error) return toast(errText(error, '注册失败'), 'error');
-
-    // 注册成功，立即核销邀请码（已开启 Confirm Email 时在验证通过后再核销）
-    const finish = async () => {
-        if (sessionStorage.getItem('66qn_invite') === inviteCode.toUpperCase()) return;
-        sessionStorage.setItem('66qn_invite', inviteCode.toUpperCase());
-        const { error: ue } = await sb.rpc('use_invite_code', { p_code: inviteCode });
-        if (ue) console.warn('邀请码核销失败', ue.message);
-    };
+    if (error) {
+        // 邀请码绑定失败时回滚，避免占用别人的邀请关系
+        if (inviteCode) { try { await sb.rpc('bind_inviter', { p_code: '' }); } catch { /* 忽略 */ } }
+        return toast(errText(error, '注册失败'), 'error');
+    }
 
     if (data.session) {
         await APP.loadProfile(data.user.id);
-        await finish();
         toast('注册成功，新用户赠送 5000 电力！');
         location.hash = '#/power';
     } else {
-        // Confirm Email 开启：先验证邮箱，验证通过后再核销邀请码
-        sessionStorage.setItem('66qn_pending_invite', inviteCode);
+        // Confirm Email 开启：先验证邮箱，验证通过后再回到首页
+        if (inviteCode) sessionStorage.setItem('66qn_pending_invite', inviteCode);
         toast('验证码已发送到邮箱', 'success');
         location.hash = '#/verify';
     }
@@ -1551,11 +1705,11 @@ async function submitVerify() {
     sessionStorage.removeItem('66qn_verify_email');
     if (data.session) {
         await APP.loadProfile(data.session.user.id);
-        // 邮箱验证通过后核销邀请码
+        // 邮箱验证通过，如有待绑定邀请码则绑定
         const pendingInvite = sessionStorage.getItem('66qn_pending_invite');
         if (pendingInvite) {
             sessionStorage.removeItem('66qn_pending_invite');
-            await sb.rpc('use_invite_code', { p_code: pendingInvite });
+            try { await sb.rpc('bind_inviter', { p_code: pendingInvite }); } catch { /* 忽略 */ }
         }
         toast('验证成功，欢迎加入！');
         location.hash = '#/';
@@ -1635,7 +1789,6 @@ async function renderAdmin(app, sub) {
         { key: 'features', label: '玩法特色', icon: icons.cube },
         { key: 'commands', label: '服务器指令', icon: icons.settings },
         { key: 'members', label: '成员管理', icon: icons.users },
-        { key: 'invites', label: '邀请码管理', icon: icons.flag },
         { key: 'mods', label: '模组管理', icon: icons.download },
         { key: 'events', label: '活动管理', icon: icons.users },
         { key: 'records', label: '游戏实录', icon: icons.download },
@@ -1660,7 +1813,6 @@ async function renderAdmin(app, sub) {
         case 'features': renderAdminTable(content, 'game_features'); break;
         case 'commands': renderAdminTable(content, 'server_commands'); break;
         case 'members': renderAdminTable(content, 'members'); break;
-        case 'invites': renderAdminInvites(content); break;
         case 'mods': renderAdminMods(content); break;
         case 'events': renderAdminEvents(content); break;
         case 'records': renderAdminRecords(content); break;
@@ -2150,78 +2302,6 @@ async function deleteMod(id) {
     if (error) return toast(errText(error, '删除失败'), 'error');
     toast('已删除');
     renderAdminMods(document.getElementById('admin-content'));
-}
-
-// ==================== 后台：邀请码管理 ====================
-function makeInviteCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let out = '';
-    for (let i = 0; i < 8; i++) out += chars[Math.floor(Math.random() * chars.length)];
-    return out;
-}
-
-async function renderAdminInvites(el) {
-    const { data: codes } = await sb.from('invite_codes').select('*').order('created_at', { ascending: false }).limit(300);
-    const unused = (codes || []).filter(c => c.enabled && !c.used_by).length;
-    el.innerHTML = `
-        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-4)">邀请码管理</h2>
-        <p class="text-secondary mb-8" style="font-size:.875rem">开启邀请码注册后，新用户必须填写有效邀请码才能注册。当前可用邀请码：<strong>${unused}</strong> 个。</p>
-        <div class="card mb-8">
-            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">生成邀请码</h3>
-            <div class="grid-2">
-                <div class="form-group"><label class="form-label">生成数量</label><input class="input" id="inv-count" type="number" value="10" min="1" max="100"></div>
-                <div class="form-group"><label class="form-label">备注（可选）</label><input class="input" id="inv-note" placeholder="例如 第一批发放" maxlength="60"></div>
-            </div>
-            <button class="btn btn-primary" onclick="generateInviteCodes()">生成邀请码</button>
-        </div>
-        <div class="card" style="padding:0;overflow:auto">
-            <table class="data-table">
-                <thead><tr><th>邀请码</th><th>状态</th><th>备注</th><th>使用者</th><th>使用时间</th><th>操作</th></tr></thead>
-                <tbody>${(codes || []).map(c => `
-                    <tr>
-                        <td><code style="font-size:.9375rem;font-weight:600;letter-spacing:.05em">${esc(c.code)}</code></td>
-                        <td>${c.used_by
-                            ? '<span class="badge badge-gray">已使用</span>'
-                            : (c.enabled ? '<span class="badge badge-green">可用</span>' : '<span class="badge badge-red">已停用</span>')}</td>
-                        <td class="text-tertiary">${esc(c.note || '')}</td>
-                        <td class="text-tertiary">${c.used_by ? String(c.used_by).slice(0, 8) : '—'}</td>
-                        <td class="text-tertiary">${c.used_at ? new Date(c.used_at).toLocaleString('zh-CN') : '—'}</td>
-                        <td>
-                            <button class="btn btn-ghost btn-sm" onclick="toggleInviteCode('${c.id}',${c.enabled ? 'false' : 'true'})">${c.enabled ? '停用' : '启用'}</button>
-                            <button class="btn btn-ghost btn-sm" onclick="copyInviteCode('${c.code}')">复制</button>
-                            <button class="btn btn-ghost btn-sm" onclick="deleteInviteCode('${c.id}')">删除</button>
-                        </td>
-                    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">还没有邀请码，请在上方生成</td></tr>'}</tbody>
-            </table>
-        </div>`;
-}
-
-async function generateInviteCodes() {
-    const count = Math.max(1, Math.min(100, parseInt(document.getElementById('inv-count').value) || 10));
-    const note = document.getElementById('inv-note').value.trim();
-    const rows = [];
-    for (let i = 0; i < count; i++) rows.push({ code: makeInviteCode(), note, enabled: true });
-    const { error } = await sb.from('invite_codes').insert(rows);
-    if (error) return toast(errText(error, '生成失败'), 'error');
-    toast('已生成 ' + count + ' 个邀请码');
-    renderAdminInvites(document.getElementById('admin-content'));
-}
-
-async function toggleInviteCode(id, enabled) {
-    await sb.from('invite_codes').update({ enabled }).eq('id', id);
-    toast(enabled ? '已启用' : '已停用');
-    renderAdminInvites(document.getElementById('admin-content'));
-}
-
-function copyInviteCode(code) {
-    navigator.clipboard.writeText(code).then(() => toast('邀请码已复制：' + code)).catch(() => prompt('请手动复制邀请码：', code));
-}
-
-async function deleteInviteCode(id) {
-    if (!confirm('确定删除该邀请码？')) return;
-    await sb.from('invite_codes').delete().eq('id', id);
-    toast('已删除');
-    renderAdminInvites(document.getElementById('admin-content'));
 }
 
 // ==================== 后台：游戏实录审核 ====================
