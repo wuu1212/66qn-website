@@ -131,8 +131,10 @@ on conflict (key) do nothing;
 -- ============================================================
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare new_id uuid;
+declare gift integer := 5000;
 begin
-  insert into public.profiles (id, username, email, game_id, register_reason, avatar_url)
+  insert into public.profiles (id, username, email, game_id, register_reason, avatar_url, power)
   values (
     new.id,
     coalesce(
@@ -143,9 +145,16 @@ begin
     new.email,
     new.raw_user_meta_data->>'game_id',
     new.raw_user_meta_data->>'register_reason',
-    new.raw_user_meta_data->>'avatar_url'
+    new.raw_user_meta_data->>'avatar_url',
+    gift
   )
-  on conflict (id) do nothing;
+  on conflict (id) do nothing
+  returning id into new_id;
+
+  if new_id is not null then
+    insert into public.power_logs (user_id, amount, kind, note)
+    values (new_id, gift, 'newuser', '新用户注册赠送');
+  end if;
   return new;
 end $$;
 
@@ -541,6 +550,119 @@ drop policy if exists "members_read"  on public.members;
 drop policy if exists "members_admin" on public.members;
 create policy "members_read"  on public.members for select using (enabled = true or public.is_admin());
 create policy "members_admin" on public.members for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
+-- 21. 电力系统（每日登录 +100 / 新用户注册 +5000；兑换后期开放）
+-- ============================================================
+alter table public.profiles add column if not exists power integer not null default 0;
+
+create table if not exists public.power_logs (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references public.profiles(id) on delete cascade,
+  amount     integer not null,
+  kind       text not null default 'manual',   -- newuser | daily | admin
+  note       text not null default '',
+  created_at timestamptz not null default now()
+);
+alter table public.power_logs enable row level security;
+drop policy if exists "power_logs_own"  on public.power_logs;
+drop policy if exists "power_logs_admin" on public.power_logs;
+create policy "power_logs_own"  on public.power_logs for select
+  using (user_id = auth.uid() or public.is_admin());
+create policy "power_logs_admin" on public.power_logs for all
+  using (public.is_admin()) with check (public.is_admin());
+create index if not exists idx_power_logs_user on public.power_logs(user_id, created_at desc);
+
+-- 给已存在的老用户补一次新用户赠送（只补没有记录过的，避免重复发放）
+insert into public.power_logs (user_id, amount, kind, note)
+select p.id, 5000, 'newuser', '新用户注册赠送'
+from public.profiles p
+where not exists (select 1 from public.power_logs l where l.user_id = p.id and l.kind = 'newuser');
+
+update public.profiles p
+set power = coalesce(power, 0) + 5000
+where not exists (select 1 from public.power_logs l where l.user_id = p.id and l.kind = 'newuser');
+
+-- 每日签到（按北京时间计算，每天仅一次，返回本次获得的电力，0 表示今天已领过）
+create or replace function public.claim_daily_power()
+returns integer language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid();
+declare today date := (now() at time zone 'Asia/Shanghai')::date;
+declare last_day date;
+declare amt integer;
+begin
+  if uid is null then raise exception 'not authorized'; end if;
+
+  select (created_at at time zone 'Asia/Shanghai')::date into last_day
+  from public.power_logs
+  where user_id = uid and kind = 'daily'
+  order by created_at desc limit 1;
+
+  if last_day is not null and last_day >= today then
+    return 0;
+  end if;
+
+  insert into public.power_logs (user_id, amount, kind, note)
+  values (uid, 100, 'daily', '每日登录赠送')
+  returning amount into amt;
+
+  update public.profiles set power = coalesce(power, 0) + amt where id = uid;
+  return amt;
+end $$;
+grant execute on function public.claim_daily_power() to authenticated;
+
+-- 管理员手动调整电力（可正可负）
+create or replace function public.admin_add_power(p_user uuid, p_amount integer, p_note text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception 'not authorized'; end if;
+  insert into public.power_logs (user_id, amount, kind, note)
+  values (p_user, p_amount, 'admin', coalesce(nullif(trim(p_note), ''), '管理员调整'));
+  update public.profiles set power = coalesce(power, 0) + p_amount where id = p_user;
+end $$;
+grant execute on function public.admin_add_power(uuid, integer, text) to authenticated;
+
+-- ============================================================
+-- 22. 邀请码注册（邀请码表前端不可读，只能通过 RPC 校验与核销）
+-- ============================================================
+create table if not exists public.invite_codes (
+  id         uuid primary key default gen_random_uuid(),
+  code       text unique not null,
+  note       text not null default '',
+  enabled    boolean not null default true,
+  used_by    uuid references public.profiles(id) on delete set null,
+  used_at    timestamptz,
+  created_at timestamptz not null default now()
+);
+alter table public.invite_codes enable row level security;
+drop policy if exists "invite_admin" on public.invite_codes;
+create policy "invite_admin" on public.invite_codes for all
+  using (public.is_admin()) with check (public.is_admin());
+
+-- 校验邀请码是否可用（不泄露任何内容）
+create or replace function public.check_invite_code(p_code text)
+returns boolean language sql security definer set search_path = public as $$
+  select exists (
+    select 1 from public.invite_codes
+    where code = upper(trim(coalesce(p_code, ''))) and enabled = true and used_by is null
+  );
+$$;
+grant execute on function public.check_invite_code(text) to anon, authenticated;
+
+-- 注册成功后核销邀请码（绑定到当前用户）
+create or replace function public.use_invite_code(p_code text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid();
+declare n integer;
+begin
+  if uid is null then raise exception 'not authorized'; end if;
+  update public.invite_codes
+  set used_by = uid, used_at = now()
+  where code = upper(trim(coalesce(p_code, ''))) and enabled = true and used_by is null;
+  get diagnostics n = row_count;
+  return n > 0;
+end $$;
+grant execute on function public.use_invite_code(text) to authenticated;
 
 -- ============================================================
 -- 完成。部署清单：
