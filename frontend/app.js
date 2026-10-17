@@ -1403,7 +1403,8 @@ async function doRegister() {
     if (registerReason.length < 5) return toast('请填写注册原因（至少5个字符）', 'error');
     if (password.length < 6) return toast('密码至少6位', 'error');
 
-    const redirectTo = location.origin + location.pathname + '#/verify';
+    // 邮件里的确认链接点击后回到首页（SDK 会自动完成登录）；验证码则在 #/verify 页面输入
+    const redirectTo = location.origin + location.pathname + '#/';
     const { data, error } = await sb.auth.signUp({
         email, password,
         options: { emailRedirectTo: redirectTo, data: { username, game_id: gameId, register_reason: registerReason } },
