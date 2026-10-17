@@ -332,6 +332,11 @@ create table if not exists public.agreements (
   version     text not null default 'v1',
   accepted_at timestamptz not null default now()
 );
+-- 给已有用户补齐邮箱，确保邮箱登录和用户名反查都可用
+update public.profiles p
+set email = u.email
+from auth.users u
+where p.id = u.id and (p.email is null or p.email = '');
 alter table public.agreements enable row level security;
 drop policy if exists "agreements_own" on public.agreements;
 create policy "agreements_own" on public.agreements for all
