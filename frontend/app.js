@@ -1671,7 +1671,8 @@ async function doRegister() {
         toast('注册成功，新用户赠送 5000 电力！');
         location.hash = '#/power';
     } else {
-        // Confirm Email 开启：先验证邮箱，验证通过后再回到首页
+        // Confirm Email 开启：记住邮箱，验证页只填验证码即可
+        sessionStorage.setItem('66qn_verify_email', email);
         if (inviteCode) sessionStorage.setItem('66qn_pending_invite', inviteCode);
         toast('验证码已发送到邮箱', 'success');
         location.hash = '#/verify';
@@ -1680,15 +1681,11 @@ async function doRegister() {
 
 // ==================== 页面：邮箱验证 ====================
 function renderVerify(app, email) {
-    const mail = email || sessionStorage.getItem('66qn_verify_email') || '';
+    const known = email || sessionStorage.getItem('66qn_verify_email') || '';
     app.innerHTML = `
     <div class="container" style="max-width:460px;margin:0 auto;padding:var(--space-16) var(--space-6)">
         <h1 class="auth-title">邮箱验证</h1>
-        <p class="auth-subtitle">请输入注册时使用的邮箱，以及邮件中收到的验证码。</p>
-        <div class="form-group">
-            <label class="form-label">注册邮箱</label>
-            <input class="input" id="verify-email" type="email" value="${esc(mail)}" placeholder="you@example.com" autocomplete="email">
-        </div>
+        <p class="auth-subtitle">验证码已发送至 <strong>${esc(known || '你的注册邮箱')}</strong>，请输入邮件中的验证码完成注册。</p>
         <div class="form-group">
             <label class="form-label">验证码</label>
             <input class="input" id="verify-code" placeholder="邮件中的 6-8 位验证码" maxlength="12" autocomplete="one-time-code">
@@ -1696,9 +1693,23 @@ function renderVerify(app, email) {
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="submitVerify()">验证并登录</button>
         <div class="auth-link">
             <a href="javascript:void(0)" onclick="resendVerify()">没有收到验证码？重新发送</a>
+            <span class="text-tertiary"> · </span>
+            <a href="javascript:void(0)" onclick="toggleVerifyEmail()">更换邮箱</a>
+        </div>
+        <div class="form-group" id="verify-email-wrap" style="display:${known ? 'none' : 'block'};margin-top:.5rem">
+            <label class="form-label">注册邮箱（仅注册时填错邮箱才需要修改）</label>
+            <input class="input" id="verify-email" type="email" value="${esc(known)}" placeholder="you@example.com" autocomplete="email">
         </div>
         <div class="auth-link">还没有账号？<a href="#/register">去注册</a> · 已验证？<a href="#/login">去登录</a></div>
     </div>`;
+    if (known) sessionStorage.setItem('66qn_verify_email', known);
+}
+
+function toggleVerifyEmail() {
+    const wrap = document.getElementById('verify-email-wrap');
+    if (!wrap) return;
+    wrap.style.display = 'block';
+    document.getElementById('verify-email')?.focus();
 }
 
 async function submitVerify() {
