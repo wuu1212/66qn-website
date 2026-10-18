@@ -144,6 +144,20 @@ Deno.serve(async (req: Request) => {
 
   const admin = createClient(SUPABASE_URL, SERVICE_KEY);
 
+  /** 校验调用者是否为有效管理员；不是则返回一个 Response（是则返回 null） */
+  async function requireAdmin(r: Request): Promise<Response | null> {
+    const hdr = r.headers.get('Authorization') || r.headers.get('apikey') || '';
+    const token = hdr.replace(/^Bearer\s+/i, '').trim();
+    if (!token) return json({ error: '未登录', need_login: true }, 401);
+    const u = await admin.auth.getUser(token);
+    if (u.error || !u.data || !u.data.user) return json({ error: '登录状态无效', need_login: true }, 401);
+    const { data: prof } = await admin.from('profiles').select('role,status').eq('id', u.data.user.id).maybeSingle();
+    if (!prof || prof.role !== 'admin' || prof.status !== 'active') {
+      return json({ error: '需要管理员权限' }, 403);
+    }
+    return null;
+  }
+
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return json({ error: 'invalid json' }, 400); }
 
@@ -249,6 +263,59 @@ Deno.serve(async (req: Request) => {
       }
 
       return json({ verdict: shouldDelete ? 'delete' : 'keep', reason, autoDeleted: shouldDelete, model: cfg.name });
+    }
+
+    // ---------------- 管理员：通过申请并创建账号 ----------------
+    if (action === 'create_account') {
+      const guard = await requireAdmin(req);
+      if (guard) return guard;
+
+      const appId = String(body.app_id || '');
+      if (!appId) return json({ error: '缺少申请编号' }, 400);
+
+      const { data: sec, error: secErr } = await admin.rpc('get_application_secret', { p_app: appId });
+      if (secErr || !sec) return json({ error: '读取申请失败：' + (secErr ? secErr.message : '记录不存在') }, 500);
+
+      const nickname = String(sec.nickname || '').trim();
+      const password = String(sec.password || '');
+      const question = String(sec.question || '');
+      const answer = String(sec.answer || '');
+      if (!nickname || !password) return json({ error: '申请资料不完整，请让用户重新提交' }, 500);
+
+      // 生成一个只用于 Supabase Auth 的登录地址（不会真的收发邮件）
+      const tag = nickname.toLowerCase().replace(/[^a-z0-9_.-]/g, '') || 'player';
+      const email = `${tag}_${Math.random().toString(36).slice(2, 8)}@apply.66qn.top`;
+
+      const created = await admin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { username: nickname, security_q: question, security_answer: answer },
+      });
+      if (created.error || !created.data || !created.data.user) {
+        return json({ error: '创建账号失败：' + (created.error ? created.error.message : '未知错误') }, 500);
+      }
+      const uid = created.data.user.id;
+
+      await admin.rpc('complete_application', { p_app: appId, p_user: uid });
+      await admin.rpc('set_profile_security', { p_user: uid, p_question: question, p_answer: answer });
+
+      return json({ ok: true, user_id: uid, nickname });
+    }
+
+    // ---------------- 管理员：设置或修改用户登录密码 ----------------
+    if (action === 'set_password') {
+      const guard = await requireAdmin(req);
+      if (guard) return guard;
+
+      const userId = String(body.user_id || '');
+      const newPass = String(body.password || '');
+      if (!userId) return json({ error: '缺少用户编号' }, 400);
+      if (newPass.length < 6) return json({ error: '密码至少6位' }, 400);
+
+      const r = await admin.auth.admin.updateUserById(userId, { password: newPass });
+      if (r.error) return json({ error: '修改密码失败：' + r.error.message }, 500);
+      return json({ ok: true });
     }
 
     return json({ error: 'unknown action' }, 400);
