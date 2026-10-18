@@ -1545,7 +1545,7 @@ function renderLogin(app) {
         <button class="github-btn" onclick="githubLogin()">${icons.github} 使用 GitHub 登录</button>
         <div class="auth-divider">或</div>
         <div class="form-group"><label class="form-label">邮箱或用户名</label>
-            <input class="input" id="login-email" type="text" placeholder="邮箱（当前支持邮箱登录）"></div>
+            <input class="input" id="login-email" type="text" placeholder="邮箱或用户名" autocomplete="username"></div>
         <div class="form-group"><label class="form-label">密码</label>
             <input class="input" id="login-password" type="password" placeholder="输入密码"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doLogin()">登录</button>
@@ -1617,18 +1617,18 @@ function renderRegister(app) {
         <p class="auth-subtitle">加入 66qn 服务器社区</p>
         <button class="github-btn" onclick="githubLogin()">${icons.github} 使用 GitHub 注册</button>
         <div class="auth-divider">或</div>
-        <div class="form-group"><label class="form-label">用户名 <span class="text-tertiary">(3-20字符)</span></label>
-            <input class="input" id="reg-username" placeholder="你的用户名" maxlength="20"></div>
+        <div class="form-group"><label class="form-label">用户名 <span class="text-tertiary">(3-20字符，昵称，不要填邮箱)</span></label>
+            <input class="input" id="reg-username" placeholder="例如 wuu1212" maxlength="20" autocomplete="nickname"></div>
         <div class="form-group"><label class="form-label">邮箱</label>
-            <input class="input" id="reg-email" type="email" placeholder="用于登录和验证"></div>
+            <input class="input" id="reg-email" type="email" placeholder="用于登录和验证" autocomplete="email"></div>
         <div class="form-group"><label class="form-label">游戏 ID</label>
-            <input class="input" id="reg-game-id" placeholder="你的 Minecraft 游戏 ID" maxlength="32"></div>
+            <input class="input" id="reg-game-id" placeholder="你的 Minecraft 游戏 ID" maxlength="32" autocomplete="off"></div>
         <div class="form-group"><label class="form-label">注册原因</label>
             <textarea class="textarea" id="reg-reason" rows="3" maxlength="500" placeholder="简单介绍你为什么想加入 66qn"></textarea></div>
         <div class="form-group"><label class="form-label">邀请码 <span class="text-tertiary">(选填)</span></label>
             <input class="input" id="reg-invite" placeholder="如有好友邀请，可填对方的6位邀请码" maxlength="6" autocomplete="off"></div>
         <div class="form-group"><label class="form-label">密码 <span class="text-tertiary">(至少6位)</span></label>
-            <input class="input" id="reg-password" type="password" placeholder="设置密码"></div>
+            <input class="input" id="reg-password" type="password" placeholder="设置密码" autocomplete="new-password"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doRegister()">注册</button>
         <p class="auth-link">已有账号？<a href="#/login">登录</a></p>
     </div>`;
@@ -1641,7 +1641,10 @@ async function doRegister() {
     const registerReason = document.getElementById('reg-reason').value.trim();
     const password = document.getElementById('reg-password').value;
     if (username.length < 3 || username.length > 20) return toast('用户名需3-20个字符', 'error');
+    if (username.includes('@')) return toast('用户名不能包含 @，这里填昵称（例如 wuu1212），邮箱填在下一栏', 'error');
+    if (/\s/.test(username)) return toast('用户名不能包含空格', 'error');
     if (!email.includes('@')) return toast('请输入有效的邮箱地址', 'error');
+    if (username.toLowerCase() === email.toLowerCase()) return toast('用户名不能和邮箱相同，请填一个昵称', 'error');
     if (gameId.length < 2) return toast('请填写游戏 ID', 'error');
     if (registerReason.length < 5) return toast('请填写注册原因（至少5个字符）', 'error');
     if (password.length < 6) return toast('密码至少6位', 'error');
@@ -1661,8 +1664,14 @@ async function doRegister() {
         options: { emailRedirectTo: redirectTo, data: { username, game_id: gameId, register_reason: registerReason } },
     });
     if (error) {
-        // 邀请码绑定失败时回滚，避免占用别人的邀请关系
-        if (inviteCode) { try { await sb.rpc('bind_inviter', { p_code: '' }); } catch { /* 忽略 */ } }
+        const m = String(error.message || '');
+        if (/already registered|already been registered|user already exists/i.test(m)) {
+            return toast('该邮箱已注册，请直接登录；忘记密码可联系管理员', 'error');
+        }
+        if (/password should be at least/i.test(m)) return toast('密码至少6位', 'error');
+        if (/invalid format|unable to validate email/i.test(m)) return toast('邮箱格式不正确，请检查', 'error');
+        if (/duplicate key|profiles_username_key/i.test(m)) return toast('该用户名已被占用，请换一个', 'error');
+        if (/rate limit|too many/i.test(m)) return toast('操作过于频繁，请稍后再试', 'error');
         return toast(errText(error, '注册失败'), 'error');
     }
 
