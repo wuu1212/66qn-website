@@ -1569,10 +1569,13 @@ async function doLogin() {
     // 否则首次登录用户永远无法完成登录并同意协议。
     const { error } = await sb.auth.signInWithPassword({ email, password });
     if (error) {
-        const msg = /email not confirmed/i.test(error.message || '')
-            ? '邮箱尚未验证，请先查收确认邮件并点击链接'
-            : '邮箱或密码错误，请检查后重试';
-        return toast(msg, 'error');
+        if (/email not confirmed/i.test(error.message || '')) {
+            sessionStorage.setItem('66qn_verify_email', email);
+            toast('邮箱尚未验证，正在跳转到验证页…', 'error');
+            location.hash = '#/verify';
+            return;
+        }
+        return toast('邮箱或密码错误，请检查后重试', 'error');
     }
     await APP.loadProfile((await sb.auth.getUser()).data.user.id);
     if (!(await checkAgreement())) {
@@ -1678,11 +1681,14 @@ async function doRegister() {
 // ==================== 页面：邮箱验证 ====================
 function renderVerify(app, email) {
     const mail = email || sessionStorage.getItem('66qn_verify_email') || '';
-    sessionStorage.setItem('66qn_verify_email', mail);
     app.innerHTML = `
     <div class="container" style="max-width:460px;margin:0 auto;padding:var(--space-16) var(--space-6)">
         <h1 class="auth-title">邮箱验证</h1>
-        <p class="auth-subtitle">我们已向 <strong>${esc(mail || '你的邮箱')}</strong> 发送了一封验证码邮件，请在下方输入验证码完成注册。</p>
+        <p class="auth-subtitle">请输入注册时使用的邮箱，以及邮件中收到的验证码。</p>
+        <div class="form-group">
+            <label class="form-label">注册邮箱</label>
+            <input class="input" id="verify-email" type="email" value="${esc(mail)}" placeholder="you@example.com" autocomplete="email">
+        </div>
         <div class="form-group">
             <label class="form-label">验证码</label>
             <input class="input" id="verify-code" placeholder="邮件中的 6-8 位验证码" maxlength="12" autocomplete="one-time-code">
@@ -1691,24 +1697,25 @@ function renderVerify(app, email) {
         <div class="auth-link">
             <a href="javascript:void(0)" onclick="resendVerify()">没有收到验证码？重新发送</a>
         </div>
-        <div class="auth-link">验证完成后即可<a href="#/login">去登录</a></div>
+        <div class="auth-link">还没有账号？<a href="#/register">去注册</a> · 已验证？<a href="#/login">去登录</a></div>
     </div>`;
 }
 
 async function submitVerify() {
-    const email = sessionStorage.getItem('66qn_verify_email') || '';
+    const email = document.getElementById('verify-email').value.trim();
     const token = document.getElementById('verify-code').value.trim();
-    if (!email) return toast('邮箱已丢失，请重新注册', 'error');
+    if (!email || !email.includes('@')) return toast('请输入注册时使用的邮箱', 'error');
     if (!token) return toast('请输入邮件中的验证码', 'error');
+    sessionStorage.setItem('66qn_verify_email', email);
     const { data, error } = await sb.auth.verifyOtp({ email, token, type: 'signup' });
     if (error) return toast('验证码错误或已过期：' + error.message, 'error');
     sessionStorage.removeItem('66qn_verify_email');
+    sessionStorage.removeItem('66qn_pending_invite');
     if (data.session) {
         await APP.loadProfile(data.session.user.id);
         // 邮箱验证通过，如有待绑定邀请码则绑定
         const pendingInvite = sessionStorage.getItem('66qn_pending_invite');
         if (pendingInvite) {
-            sessionStorage.removeItem('66qn_pending_invite');
             try { await sb.rpc('bind_inviter', { p_code: pendingInvite }); } catch { /* 忽略 */ }
         }
         toast('验证成功，欢迎加入！');
@@ -1720,8 +1727,9 @@ async function submitVerify() {
 }
 
 async function resendVerify() {
-    const email = sessionStorage.getItem('66qn_verify_email') || '';
-    if (!email) return toast('邮箱已丢失，请重新注册', 'error');
+    const email = document.getElementById('verify-email').value.trim();
+    if (!email || !email.includes('@')) return toast('请先填写注册时使用的邮箱', 'error');
+    sessionStorage.setItem('66qn_verify_email', email);
     const { error } = await sb.auth.resend({ type: 'signup', email });
     if (error) return toast('重新发送失败：' + error.message, 'error');
     toast('验证码已重新发送，请查收邮件');
