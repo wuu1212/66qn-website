@@ -688,6 +688,138 @@ set invite_code = public.gen_invite_code()
 where invite_code is null;
 
 -- ============================================================
+-- 23. 申请注册（免邮箱）：提交申请 → 后台审核 → 自动建号
+--     密码与保密答案用 pgcrypto 加密保存，前端无任何读取权限
+-- ============================================================
+alter table public.profiles add column if not exists security_q text not null default '';
+alter table public.profiles add column if not exists security_a_enc text not null default '';
+
+create table if not exists public.account_applications (
+  id         uuid primary key default gen_random_uuid(),
+  nickname   text not null,                          -- 申请的昵称（登录名）
+  contact    text not null,                          -- 联系方式：游戏ID / QQ / 微信（禁止填邮箱）
+  secret_q   text not null,                          -- 保密问题
+  secret_a   text not null,                          -- 保密答案（加密）
+  pwd        text not null,                          -- 密码（加密）
+  status     text not null default 'pending',        -- pending | approved | rejected
+  note       text not null default '',
+  user_id    uuid,                                   -- 审核通过后创建的账号
+  created_at timestamptz not null default now(),
+  reviewed_at timestamptz
+);
+alter table public.account_applications enable row level security;
+drop policy if exists "apps_admin" on public.account_applications;
+create policy "apps_admin" on public.account_applications for all
+  using (public.is_admin()) with check (public.is_admin());
+create index if not exists idx_apps_status on public.account_applications(status, created_at desc);
+
+-- 提交申请：匿名可用；昵称/联系方式/密码/保密问题全部在服务端校验并加密
+create or replace function public.apply_account(
+  p_nickname text, p_contact text, p_password text, p_question text, p_answer text
+)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare k text; new_id uuid;
+begin
+  if p_nickname is null or length(btrim(p_nickname)) < 3 or length(btrim(p_nickname)) > 20 then
+    raise exception '昵称需3-20个字符';
+  end if;
+  if position('@' in p_nickname) > 0 then raise exception '昵称不能包含 @'; end if;
+  if p_contact is null or length(btrim(p_contact)) < 2 then raise exception '请填写联系方式'; end if;
+  if position('@' in p_contact) > 0 then raise exception '联系方式不能填邮箱，请填游戏ID、QQ或微信'; end if;
+  if p_password is null or length(p_password) < 6 then raise exception '密码至少6位'; end if;
+  if p_question is null or length(btrim(p_question)) < 2 then raise exception '请设置保密问题'; end if;
+  if p_answer is null or length(btrim(p_answer)) < 1 then raise exception '请填写保密答案'; end if;
+
+  select coalesce(value, '66qn-default-secret-change-me') into k
+  from public.app_secrets where key = 'account_secret';
+
+  if exists (select 1 from public.profiles where lower(username) = lower(btrim(p_nickname))) then
+    raise exception '该昵称已被占用，请换一个';
+  end if;
+  if exists (select 1 from public.account_applications
+             where lower(nickname) = lower(btrim(p_nickname)) and status = 'pending') then
+    raise exception '该昵称已有待审核的申请，请换一个或等待审核';
+  end if;
+
+  insert into public.account_applications (nickname, contact, secret_q, secret_a, pwd)
+  values (
+    btrim(p_nickname), btrim(p_contact), btrim(p_question),
+    encode(extensions.pgp_sym_encrypt(btrim(p_answer), k), 'base64'),
+    encode(extensions.pgp_sym_encrypt(p_password, k), 'base64')
+  )
+  returning id into new_id;
+  return new_id;
+end $$;
+grant execute on function public.apply_account(text, text, text, text, text) to anon, authenticated;
+
+-- 管理员改状态（创建账号由 Edge Function 完成，成功后自动置为 approved）
+create or replace function public.review_application(p_app uuid, p_action text, p_note text)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception 'not authorized'; end if;
+  if p_action = 'reject' then
+    update public.account_applications
+    set status = 'rejected', note = coalesce(nullif(btrim(p_note), ''), '未通过'), reviewed_at = now()
+    where id = p_app;
+  else
+    update public.account_applications
+    set status = 'approved', note = coalesce(btrim(p_note), ''), reviewed_at = now()
+    where id = p_app;
+  end if;
+  return true;
+end $$;
+grant execute on function public.review_application(uuid, text, text) to authenticated;
+
+-- 以下三个函数仅供服务端（service_role / Edge Function）调用
+create or replace function public.get_application_secret(p_app uuid)
+returns jsonb language sql security definer set search_path = public as $$
+  select jsonb_build_object(
+    'nickname', a.nickname,
+    'contact',  a.contact,
+    'question', a.secret_q,
+    'answer',   extensions.pgp_sym_decrypt(decode(a.secret_a, 'base64'), (select coalesce(value,'66qn-default-secret-change-me') from public.app_secrets where key = 'account_secret')),
+    'password', extensions.pgp_sym_decrypt(decode(a.pwd, 'base64'), (select coalesce(value,'66qn-default-secret-change-me') from public.app_secrets where key = 'account_secret'))
+  )
+  from public.account_applications a where a.id = p_app;
+$$;
+revoke all on function public.get_application_secret(uuid) from public;
+revoke all on function public.get_application_secret(uuid) from anon;
+revoke all on function public.get_application_secret(uuid) from authenticated;
+
+create or replace function public.complete_application(p_app uuid, p_user uuid)
+returns void language sql security definer set search_path = public as $$
+  update public.account_applications
+  set status = 'approved', user_id = p_user, reviewed_at = now()
+  where id = p_app;
+$$;
+revoke all on function public.complete_application(uuid, uuid) from public;
+revoke all on function public.complete_application(uuid, uuid) from anon;
+revoke all on function public.complete_application(uuid, uuid) from authenticated;
+
+create or replace function public.set_profile_security(p_user uuid, p_question text, p_answer text)
+returns void language plpgsql security definer set search_path = public as $$
+declare k text;
+begin
+  select coalesce(value, '66qn-default-secret-change-me') into k
+  from public.app_secrets where key = 'account_secret';
+  update public.profiles
+  set security_q = btrim(p_question),
+      security_a_enc = encode(extensions.pgp_sym_encrypt(btrim(p_answer), k), 'base64')
+  where id = p_user;
+end $$;
+revoke all on function public.set_profile_security(uuid, text, text) from public;
+revoke all on function public.set_profile_security(uuid, text, text) from anon;
+revoke all on function public.set_profile_security(uuid, text, text) from authenticated;
+
+-- 管理员查看某条申请的保密答案（用于客服核身）
+create or replace function public.admin_view_security_answer(p_app uuid)
+returns text language sql security definer set search_path = public as $$
+  select extensions.pgp_sym_decrypt(decode(secret_a, 'base64'), (select coalesce(value,'66qn-default-secret-change-me') from public.app_secrets where key = 'account_secret'))
+  from public.account_applications where id = p_app;
+$$;
+grant execute on function public.admin_view_security_answer(uuid) to authenticated;
+
+-- ============================================================
 -- 完成。部署清单：
 -- 1) 先在 Supabase 执行本文件全部 SQL
 -- 2) 写入 AI 加密口令（把随机串换成你自己的），见文件末尾示例
