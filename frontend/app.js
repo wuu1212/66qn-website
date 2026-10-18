@@ -123,6 +123,7 @@ const APP = {
                 break;
             case '/login': renderLogin(app); break;
             case '/register': renderRegister(app); break;
+            case '/apply': renderApply(app); break;
             case '/verify': renderVerify(app, params[0] ? decodeURIComponent(params[0]) : ''); break;
             case '/profile': renderProfile(app, params[0] || (this.user && this.user.id)); break;
             case '/admin':
@@ -207,6 +208,7 @@ function toggleMobileNav() {
     nav.innerHTML = `
         <a href="#/" class="nav-link" onclick="toggleMobileNav()">首页</a>
         <a href="#/download" class="nav-link" onclick="toggleMobileNav()">下载</a>
+        <a href="#/apply" class="nav-link" onclick="toggleMobileNav()">申请账号</a>
         <a href="#/power" class="nav-link" onclick="toggleMobileNav()">电力</a>
         <a href="#/members" class="nav-link" onclick="toggleMobileNav()">成员</a>
         <a href="#/commands" class="nav-link" onclick="toggleMobileNav()">指令</a>
@@ -1549,7 +1551,7 @@ function renderLogin(app) {
         <div class="form-group"><label class="form-label">密码</label>
             <input class="input" id="login-password" type="password" placeholder="输入密码"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doLogin()">登录</button>
-        <p class="auth-link">还没有账号？<a href="#/register">注册</a></p>
+        <p class="auth-link">还没有账号？<a href="#/apply">申请账号</a>（无需邮箱，管理员审核）</p>
         <p class="auth-link">已注册但没收到验证码？<a href="#/verify">去验证邮箱</a></p>
     </div>`;
 }
@@ -1615,6 +1617,14 @@ function renderRegister(app) {
     <div class="auth-page page-enter">
         <h1 class="auth-title">注册</h1>
         <p class="auth-subtitle">加入 66qn 服务器社区</p>
+
+        <div class="apply-notice">
+            <p><strong>当前邮件功能正在配置中，请切换为申请账号</strong></p>
+            <p class="text-tertiary">邮箱注册需要邮箱验证，暂不可用。申请账号由管理员审核后即可登录，无需邮箱。</p>
+            <a href="#/apply" class="btn btn-primary" style="width:100%">前往申请账号</a>
+        </div>
+
+        <div class="auth-divider">或</div>
         <button class="github-btn" onclick="githubLogin()">${icons.github} 使用 GitHub 注册</button>
         <div class="auth-divider">或</div>
         <div class="form-group"><label class="form-label">用户名 <span class="text-tertiary">(3-20字符，昵称，不要填邮箱)</span></label>
@@ -1686,6 +1696,65 @@ async function doRegister() {
         toast('验证码已发送到邮箱', 'success');
         location.hash = '#/verify';
     }
+}
+
+// ==================== 页面：申请账号 ====================
+function renderApply(app) {
+    app.innerHTML = `
+    <div class="container" style="max-width:520px;margin:0 auto;padding:var(--space-12) var(--space-6)">
+        <h1 class="auth-title">申请账号</h1>
+        <p class="auth-subtitle">提交申请后由管理员审核，通过即可用昵称和密码登录</p>
+        <div class="card">
+            <div class="apply-notice mb-8">
+                <p class="text-tertiary">申请无需邮箱。请留下一个能联系到你的方式（游戏 ID、QQ、微信均可），方便管理员与你核对。</p>
+            </div>
+            <div class="form-group"><label class="form-label">昵称 <span class="text-tertiary">(3-20字符，将作为登录名)</span></label>
+                <input class="input" id="ap-nickname" placeholder="例如 wuu1212" maxlength="20" autocomplete="nickname"></div>
+            <div class="form-group"><label class="form-label">联系方式 <span class="text-tertiary">(不能填邮箱)</span></label>
+                <input class="input" id="ap-contact" placeholder="例如 游戏ID：Steve / QQ：123456789" maxlength="60" autocomplete="off"></div>
+            <div class="form-group"><label class="form-label">保密问题 <span class="text-tertiary">(自定义)</span></label>
+                <input class="input" id="ap-question" placeholder="例如 我最喜欢的方块是什么？" maxlength="80" autocomplete="off"></div>
+            <div class="form-group"><label class="form-label">保密答案</label>
+                <input class="input" id="ap-answer" placeholder="只有你自己知道的答案" maxlength="60" autocomplete="off"></div>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">密码 <span class="text-tertiary">(至少6位)</span></label>
+                    <input class="input" id="ap-password" type="password" placeholder="设置密码" autocomplete="new-password"></div>
+                <div class="form-group"><label class="form-label">确认密码</label>
+                    <input class="input" id="ap-password2" type="password" placeholder="再输一次" autocomplete="new-password"></div>
+            </div>
+            <button class="btn btn-primary btn-lg" style="width:100%" onclick="submitApply()">提交申请</button>
+            <p class="auth-link">已有账号？<a href="#/login">去登录</a></p>
+        </div>
+    </div>`;
+}
+
+async function submitApply() {
+    const nickname = document.getElementById('ap-nickname').value.trim();
+    const contact = document.getElementById('ap-contact').value.trim();
+    const question = document.getElementById('ap-question').value.trim();
+    const answer = document.getElementById('ap-answer').value.trim();
+    const password = document.getElementById('ap-password').value;
+    const password2 = document.getElementById('ap-password2').value;
+
+    if (nickname.length < 3 || nickname.length > 20) return toast('昵称需3-20个字符', 'error');
+    if (nickname.includes('@')) return toast('昵称不能包含 @', 'error');
+    if (contact.length < 2) return toast('请填写联系方式', 'error');
+    if (contact.includes('@')) return toast('联系方式不能填邮箱，请填游戏ID、QQ或微信', 'error');
+    if (question.length < 2) return toast('请设置保密问题', 'error');
+    if (!answer) return toast('请填写保密答案', 'error');
+    if (password.length < 6) return toast('密码至少6位', 'error');
+    if (password !== password2) return toast('两次输入的密码不一致', 'error');
+
+    const { error } = await sb.rpc('apply_account', {
+        p_nickname: nickname, p_contact: contact, p_password: password,
+        p_question: question, p_answer: answer,
+    });
+    if (error) return toast(errText(error, '提交失败'), 'error');
+    showModal('申请已提交', `
+        <p>申请已提交，管理员会尽快审核。</p>
+        <p class="text-secondary" style="margin-top:.5rem">你填写的联系方式：<strong>${esc(contact)}</strong><br>申请用的昵称：<strong>${esc(nickname)}</strong></p>
+        <p class="text-tertiary" style="margin-top:.5rem">审核通过后，用<strong>昵称 + 密码</strong>即可登录，无需邮箱。</p>`,
+        `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove();location.hash='#/login'">知道了，去登录页</button>`);
 }
 
 // ==================== 页面：邮箱验证 ====================
@@ -1816,6 +1885,7 @@ async function renderAdmin(app, sub) {
         { key: 'announcement', label: '公告管理', icon: icons.flag },
         { key: 'features', label: '玩法特色', icon: icons.cube },
         { key: 'commands', label: '服务器指令', icon: icons.settings },
+        { key: 'applications', label: '注册申请审核', icon: icons.flag },
         { key: 'members', label: '成员管理', icon: icons.users },
         { key: 'mods', label: '模组管理', icon: icons.download },
         { key: 'events', label: '活动管理', icon: icons.users },
@@ -1840,6 +1910,7 @@ async function renderAdmin(app, sub) {
         case 'announcement': renderAdminAnnouncement(content); break;
         case 'features': renderAdminTable(content, 'game_features'); break;
         case 'commands': renderAdminTable(content, 'server_commands'); break;
+        case 'applications': renderAdminApplications(content); break;
         case 'members': renderAdminTable(content, 'members'); break;
         case 'mods': renderAdminMods(content); break;
         case 'events': renderAdminEvents(content); break;
@@ -2237,6 +2308,66 @@ async function adminDeleteEvent(id) {
     await sb.from('events').delete().eq('id', id);
     toast('已删除');
     renderAdminEvents(document.getElementById('admin-content'));
+}
+
+// ==================== 后台：注册申请审核 ====================
+async function renderAdminApplications(el) {
+    const { data: apps } = await sb.from('account_applications').select('*').order('created_at', { ascending: false }).limit(300);
+    const pending = (apps || []).filter(a => a.status === 'pending');
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-4)">注册申请审核</h2>
+        <p class="text-secondary mb-8" style="font-size:.875rem">用户在「申请账号」页提交资料，你审核通过后系统会自动创建账号；之后用户用<strong>昵称 + 密码</strong>即可登录。待审核申请：<strong>${pending.length}</strong> 条。</p>
+        <div class="card" style="padding:0;overflow:auto">
+            <table class="data-table">
+                <thead><tr><th>申请时间</th><th>昵称</th><th>联系方式</th><th>保密问题</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody>${(apps || []).map(a => `
+                    <tr>
+                        <td class="text-tertiary">${new Date(a.created_at).toLocaleString('zh-CN')}</td>
+                        <td><strong>${esc(a.nickname)}</strong></td>
+                        <td class="text-tertiary">${esc(a.contact)}</td>
+                        <td>${esc(a.secret_q)}</td>
+                        <td>${a.status === 'pending' ? '<span class="badge badge-yellow">待审核</span>'
+                            : (a.status === 'approved' ? '<span class="badge badge-green">已通过</span>' : '<span class="badge badge-gray">已驳回</span>')}</td>
+                        <td>
+                            ${a.status === 'pending' ? `
+                            <button class="btn btn-primary btn-sm" onclick="approveApplication('${a.id}')">通过并创建账号</button>
+                            <button class="btn btn-ghost btn-sm" onclick="rejectApplication('${a.id}')">驳回</button>` : `
+                            <button class="btn btn-ghost btn-sm" onclick="setUserPassword('${a.user_id}', '${esc(a.nickname)}')">设置登录密码</button>`}
+                            ${a.note ? `<div class="text-tertiary" style="font-size:.75rem;margin-top:.25rem">${esc(a.note)}</div>` : ''}
+                        </td>
+                    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">还没有人提交申请</td></tr>'}</tbody>
+            </table>
+        </div>`;
+}
+
+async function approveApplication(appId) {
+    if (!confirm('通过该申请并立即创建账号？创建后用户即可用昵称+密码登录。')) return;
+    const { data, error } = await sb.functions.invoke(AI_FN, { body: { action: 'create_account', app_id: appId } });
+    if (error || !data || data.error) {
+        return toast('创建失败：' + ((error && error.message) || (data && data.error) || '未知错误'), 'error');
+    }
+    toast('账号已创建，昵称：' + (data.nickname || ''));
+    renderAdminApplications(document.getElementById('admin-content'));
+}
+
+async function rejectApplication(appId) {
+    const note = prompt('驳回原因（可选）：', '');
+    if (note === null) return;
+    const { error } = await sb.rpc('review_application', { p_app: appId, p_action: 'reject', p_note: note });
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    toast('已驳回');
+    renderAdminApplications(document.getElementById('admin-content'));
+}
+
+async function setUserPassword(userId, nickname) {
+    const pwd = prompt('为「' + nickname + '」设置新的登录密码（至少6位）：', '');
+    if (pwd === null) return;
+    if (pwd.length < 6) return toast('密码至少6位', 'error');
+    const { data, error } = await sb.functions.invoke(AI_FN, { body: { action: 'set_password', user_id: userId, password: pwd } });
+    if (error || !data || data.error) {
+        return toast('修改失败：' + ((error && error.message) || (data && data.error) || '未知错误'), 'error');
+    }
+    toast('密码已修改，请告知用户新密码');
 }
 
 // ==================== 后台：自有模组管理 ====================
