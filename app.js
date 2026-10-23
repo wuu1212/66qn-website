@@ -109,6 +109,7 @@ const APP = {
             case '/commands': renderCommands(app); break;
             case '/members': renderMembers(app); break;
             case '/power': renderPower(app); break;
+            case '/skill': renderSkill(app); break;
             case '/events': renderEvents(app, params[0]); break;
             case '/records': renderRecords(app); break;
             case '/agreement': renderAgreementPage(app); break;
@@ -169,6 +170,12 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s == 
 
 // 描述文本渲染：**词语** → 蓝底加粗强调（先转义防 XSS，再做替换）
 function mdEmphasis(s) { return esc(s || '').replace(/\*\*(.+?)\*\*/g, '<strong class="md-hl">$1</strong>'); }
+
+// 复制文本到剪贴板（失败时降级为 prompt 手动复制）
+async function copyText(t) {
+    try { await navigator.clipboard.writeText(String(t == null ? '' : t)); return true; }
+    catch { prompt('请手动复制：', String(t == null ? '' : t)); return false; }
+}
 function timeAgo(t) {
     const ts = typeof t === 'number' ? t : new Date(t).getTime();
     const diff = Date.now() - ts;
@@ -213,6 +220,7 @@ function toggleMobileNav() {
         <a href="#/download" class="nav-link" onclick="toggleMobileNav()">下载</a>
         <a href="#/apply" class="nav-link" onclick="toggleMobileNav()">申请账号</a>
         <a href="#/power" class="nav-link" onclick="toggleMobileNav()">电力</a>
+        <a href="#/skill" class="nav-link" onclick="toggleMobileNav()">AI 技能</a>
         <a href="#/members" class="nav-link" onclick="toggleMobileNav()">成员</a>
         <a href="#/commands" class="nav-link" onclick="toggleMobileNav()">指令</a>
         <a href="#/events" class="nav-link" onclick="toggleMobileNav()">活动</a>
@@ -893,7 +901,7 @@ async function refreshPowerPanel() {
         btn.textContent = claimed ? '今日已签到' : '每日签到领取 100 电力';
     }
 
-    const KIND = { newuser: '新用户注册', daily: '每日登录', admin: '管理员调整', manual: '其他', record: '游戏实录', post: '社区帖子', message: '社区私信', invite: '邀请好友' };
+    const KIND = { newuser: '新用户注册', daily: '每日登录', admin: '管理员调整', manual: '其他', record: '游戏实录', post: '社区帖子', message: '社区私信', invite: '邀请好友', skill: 'AI 技能安装', open: '开放平台' };
     listEl.innerHTML = (logs || []).length
         ? `<table class="data-table"><thead><tr><th>时间</th><th>类型</th><th>数量</th><th>说明</th></tr></thead>
            <tbody>${logs.map(l => `<tr>
@@ -932,6 +940,112 @@ async function regenMyInviteCode() {
     const codeEl = document.getElementById('my-invite-code');
     if (codeEl) codeEl.textContent = data;
     toast('已生成新邀请码');
+}
+
+// ==================== 页面：AI 技能（开放平台 · 玩家入口） ====================
+async function renderSkill(app) {
+    app.innerHTML = `
+    <div class="container" style="max-width:760px;padding:var(--space-12) var(--space-6)">
+        <h1 class="section-title">AI 技能 · 自动管家</h1>
+        <p class="text-secondary mb-8">把 66qn 的 AI 技能装进你的 AI 助手（Claude / ChatGPT / 夸克 / 各类 Agent），它就能替你自动干活。</p>
+
+        <div class="power-rules mb-8">
+            <div class="card power-task-card"><div><div class="form-label">每日自动签到</div><p class="text-secondary" style="font-size:.8125rem">AI 每天替你签到领取电力</p></div><span class="power-task-reward">+100/天</span></div>
+            <div class="card power-task-card"><div><div class="form-label">查询电力余额</div><p class="text-secondary" style="font-size:.8125rem">随时问 AI「我还有多少电力」</p></div><span class="power-task-reward">实时</span></div>
+            <div class="card power-task-card"><div><div class="form-label">查询账号信息</div><p class="text-secondary" style="font-size:.8125rem">昵称、游戏 ID、注册时间等</p></div><span class="power-task-reward">实时</span></div>
+            <div class="card power-task-card"><div><div class="form-label">安装奖励</div><p class="text-secondary" style="font-size:.8125rem">首次安装成功并完成首次连接</p></div><span class="power-task-reward">+60000</span></div>
+        </div>
+
+        <div class="card mb-8" id="skill-uid-card">${loadingBlock()}</div>
+        <div class="card mb-8" id="skill-prompt-card">${loadingBlock()}</div>
+
+        <div class="card">
+            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">技能文件</h3>
+            <p class="text-secondary" style="font-size:.875rem;margin-bottom:.75rem">把 SKILL.md 交给你的 AI，或让它自己去下面这个地址下载。</p>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem">
+                <a class="btn btn-secondary" href="agent-skill-66qn/SKILL.md" target="_blank" rel="noopener">在线查看</a>
+                <a class="btn btn-primary" href="agent-skill-66qn/SKILL.md" download="SKILL.md">下载 SKILL.md</a>
+            </div>
+            <p class="text-tertiary" style="font-size:.8125rem">文件地址：<code>https://66qnmc.top/agent-skill-66qn/SKILL.md</code></p>
+        </div>
+    </div>`;
+    await loadSkillPanel();
+}
+
+async function loadSkillPanel() {
+    const uidCard = document.getElementById('skill-uid-card');
+    const promptCard = document.getElementById('skill-prompt-card');
+    if (!uidCard || !promptCard) return;
+
+    if (!APP.user) {
+        uidCard.innerHTML = `<h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">我的授权码</h3>
+            <p class="text-secondary" style="font-size:.875rem;margin-bottom:.75rem">登录后即可领取你的专属授权码。</p>
+            <a href="#/login" class="btn btn-primary">去登录</a>`;
+        promptCard.innerHTML = `<h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">安装提示词</h3>
+            <p class="text-secondary" style="font-size:.875rem">登录后生成属于你的安装提示词。</p>`;
+        return;
+    }
+
+    const [{ data: myUid }, { data: rewardLog }] = await Promise.all([
+        sb.rpc('view_my_open_uid'),
+        sb.from('power_logs').select('id').eq('user_id', APP.user.id).eq('kind', 'skill').maybeSingle(),
+    ]);
+    const uid = typeof myUid === 'string' ? myUid : (myUid && myUid.uid) || '';
+
+    uidCard.innerHTML = `
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">我的授权码</h3>
+        ${uid ? `
+            <p class="text-secondary" style="font-size:.875rem;margin-bottom:.75rem">授权码是 AI 技能操作你账号的唯一凭证，请勿泄露给他人。</p>
+            <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+                <code id="my-skill-uid" style="font-size:.9375rem;background:var(--color-bg-tertiary);padding:.5rem .75rem;border-radius:6px;word-break:break-all">${esc(uid)}</code>
+                <button class="btn btn-secondary btn-sm" onclick="copySkillUid()">复制授权码</button>
+            </div>` : `
+            <p class="text-secondary" style="font-size:.875rem;margin-bottom:.75rem">你还没有领取授权码。点击下方按钮领取（每人一个，仅支持签到和查询，不能动你的电力余额）。</p>
+            <button class="btn btn-primary" onclick="claimSkillUid()">领取我的授权码</button>`}`;
+
+    promptCard.innerHTML = `
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">安装提示词（复制后发给你的 AI）</h3>
+        ${uid ? `
+            <textarea class="textarea" id="skill-prompt-text" rows="7" readonly style="font-size:.8125rem;line-height:1.7">请帮我安装并使用「66qn AI 技能」：
+1. 从 https://66qnmc.top/agent-skill-66qn/SKILL.md 下载技能文件并阅读
+2. 按文件说明安装技能，将授权码 ${uid} 配置为环境变量 QN66_UID
+3. 调用开放接口执行一次每日签到（checkin），完成首次连接
+4. 把签到结果告诉我</textarea>
+            <div style="display:flex;gap:.5rem;margin-top:.75rem;flex-wrap:wrap">
+                <button class="btn btn-primary" onclick="copySkillPrompt()">复制提示词</button>
+            </div>
+            <p class="text-tertiary" style="font-size:.8125rem;margin-top:.75rem">首次连接成功后，<strong>60000 电力</strong>奖励自动到账。
+            当前状态：${rewardLog ? '<span class="badge badge-green">已获得</span>' : '<span class="badge badge-gray">未获得</span>'}</p>`
+        : `<p class="text-secondary" style="font-size:.875rem">领取授权码后，这里会生成属于你的安装提示词。</p>`}`;
+}
+
+async function claimSkillUid() {
+    const { data, error } = await sb.rpc('claim_open_account');
+    if (error) return toast(errText(error, '领取失败'), 'error');
+    if (data && data.is_new && data.uid) {
+        showModal('领取成功 · 请妥善保存', `
+            <p class="text-secondary" style="font-size:.875rem;margin-bottom:.75rem">这是你的专属授权码，只会完整显示这一次，之后可在本页随时查看。</p>
+            <code style="display:block;font-size:.9375rem;background:var(--color-bg-tertiary);padding:.75rem;border-radius:6px;word-break:break-all">${esc(data.uid)}</code>`,
+            `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">关闭</button>
+             <button class="btn btn-primary" onclick="copyText('${data.uid}').then(()=>toast('授权码已复制'))">复制授权码</button>`);
+    } else {
+        toast('你已领取过授权码');
+    }
+    await loadSkillPanel();
+}
+
+async function copySkillUid() {
+    const el = document.getElementById('my-skill-uid');
+    if (!el) return;
+    try { await navigator.clipboard.writeText(el.textContent || ''); toast('授权码已复制'); }
+    catch { prompt('请手动复制授权码：', el.textContent || ''); }
+}
+
+async function copySkillPrompt() {
+    const el = document.getElementById('skill-prompt-text');
+    if (!el) return;
+    try { await navigator.clipboard.writeText(el.value || ''); toast('提示词已复制，快去发给你的 AI'); }
+    catch { el.select(); document.execCommand && document.execCommand('copy'); toast('提示词已复制'); }
 }
 
 // ==================== 页面：活动 ====================
