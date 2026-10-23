@@ -29,3 +29,9 @@ build/
 # Logs
 *.log
 npm-debug.log*
+
+# Temp / credentials (never commit)
+.cred-tmp.txt
+.sync-tmp.mjs
+.sync.log
+agent-skill-66qn/uid.txt

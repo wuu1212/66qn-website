@@ -1551,7 +1551,7 @@ function renderLogin(app) {
         <div class="form-group"><label class="form-label">密码</label>
             <input class="input" id="login-password" type="password" placeholder="输入密码"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doLogin()">登录</button>
-        <p class="auth-link">还没有账号？<a href="#/apply">申请账号</a>（无需邮箱，管理员审核）</p>
+        <p class="auth-link">还没有账号？<a href="#/register">邮箱注册</a> · <a href="#/apply">申请账号</a>（无需邮箱）</p>
         <p class="auth-link">已注册但没收到验证码？<a href="#/verify">去验证邮箱</a></p>
     </div>`;
 }
@@ -1619,9 +1619,8 @@ function renderRegister(app) {
         <p class="auth-subtitle">加入 66qn 服务器社区</p>
 
         <div class="apply-notice">
-            <p><strong>当前邮件功能正在配置中，请切换为申请账号</strong></p>
-            <p class="text-tertiary">邮箱注册需要邮箱验证，暂不可用。申请账号由管理员审核后即可登录，无需邮箱。</p>
-            <a href="#/apply" class="btn btn-primary" style="width:100%">前往申请账号</a>
+            <p><strong>使用邮箱注册</strong></p>
+            <p class="text-tertiary">注册后会向你的邮箱发送验证码，验证通过即可登录。如果没收到，请检查垃圾邮件。</p>
         </div>
 
         <div class="auth-divider">或</div>
@@ -1641,6 +1640,7 @@ function renderRegister(app) {
             <input class="input" id="reg-password" type="password" placeholder="设置密码" autocomplete="new-password"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doRegister()">注册</button>
         <p class="auth-link">已有账号？<a href="#/login">登录</a></p>
+        <p class="auth-link">不想用邮箱？<a href="#/apply">申请账号</a>（管理员审核，无需邮箱）</p>
     </div>`;
 }
 
@@ -1658,13 +1658,13 @@ async function doRegister() {
     if (gameId.length < 2) return toast('请填写游戏 ID', 'error');
     if (registerReason.length < 5) return toast('请填写注册原因（至少5个字符）', 'error');
     if (password.length < 6) return toast('密码至少6位', 'error');
-    // 邀请码选填：填了就必须有效，没填直接跳过
+    // 邀请码选填：注册时还没有登录态，先验证存在性，等拿到 session 后再绑定
     let inviteCode = document.getElementById('reg-invite').value.trim();
     if (inviteCode) {
         if (!/^\d{6}$/.test(inviteCode)) return toast('邀请码为6位数字，请检查后重试', 'error');
-        const { data: codeOk, error: codeErr } = await sb.rpc('bind_inviter', { p_code: inviteCode });
+        const { data: inviter, error: codeErr } = await sb.from('profiles').select('id').eq('invite_code', inviteCode).neq('status', 'banned').maybeSingle();
         if (codeErr) return toast('邀请码校验失败，请稍后重试', 'error');
-        if (!codeOk) return toast('邀请码不存在或无效', 'error');
+        if (!inviter) return toast('邀请码不存在或无效', 'error');
     }
 
     // 邮件里的确认链接点击后回到首页（SDK 会自动完成登录）；验证码则在 #/verify 页面输入
@@ -1687,6 +1687,9 @@ async function doRegister() {
 
     if (data.session) {
         await APP.loadProfile(data.user.id);
+        if (inviteCode) {
+            try { await sb.rpc('bind_inviter', { p_code: inviteCode }); } catch { /* 邀请关系失败不影响注册 */ }
+        }
         toast('注册成功，新用户赠送 5000 电力！');
         location.hash = '#/power';
     } else {
@@ -1764,6 +1767,7 @@ function renderVerify(app, email) {
     <div class="container" style="max-width:460px;margin:0 auto;padding:var(--space-16) var(--space-6)">
         <h1 class="auth-title">邮箱验证</h1>
         <p class="auth-subtitle">验证码已发送至 <strong>${esc(known || '你的注册邮箱')}</strong>，请输入邮件中的验证码完成注册。</p>
+        <p class="text-tertiary" style="text-align:center;font-size:.85rem;margin-bottom:var(--space-4)">没收到？请先检查垃圾邮件，再点下方重新发送。</p>
         <div class="form-group">
             <label class="form-label">验证码</label>
             <input class="input" id="verify-code" placeholder="邮件中的 6-8 位验证码" maxlength="12" autocomplete="one-time-code">
@@ -1799,11 +1803,11 @@ async function submitVerify() {
     const { data, error } = await sb.auth.verifyOtp({ email, token, type: 'signup' });
     if (error) return toast('验证码错误或已过期：' + error.message, 'error');
     sessionStorage.removeItem('66qn_verify_email');
-    sessionStorage.removeItem('66qn_pending_invite');
     if (data.session) {
         await APP.loadProfile(data.session.user.id);
         // 邮箱验证通过，如有待绑定邀请码则绑定
         const pendingInvite = sessionStorage.getItem('66qn_pending_invite');
+        sessionStorage.removeItem('66qn_pending_invite');
         if (pendingInvite) {
             try { await sb.rpc('bind_inviter', { p_code: pendingInvite }); } catch { /* 忽略 */ }
         }
@@ -1891,6 +1895,7 @@ async function renderAdmin(app, sub) {
         { key: 'events', label: '活动管理', icon: icons.users },
         { key: 'records', label: '游戏实录', icon: icons.download },
         { key: 'ai', label: 'AI 配置', icon: icons.shield },
+        { key: 'open', label: '开放平台', icon: icons.shield },
         { key: 'agreement', label: '协议设置', icon: icons.flag },
         { key: 'server', label: '服务器设置', icon: icons.settings },
     ];
@@ -1916,6 +1921,7 @@ async function renderAdmin(app, sub) {
         case 'events': renderAdminEvents(content); break;
         case 'records': renderAdminRecords(content); break;
         case 'ai': renderAdminAi(content); break;
+        case 'open': renderAdminOpen(content); break;
         case 'agreement': renderAdminAgreement(content); break;
         case 'server': renderAdminServer(content); break;
         default: renderAdminDashboard(content);
@@ -2499,6 +2505,135 @@ async function adminDeleteRecord(id) {
     if (error) return toast(errText(error, '删除失败'), 'error');
     toast('已删除');
     renderAdminRecords(document.getElementById('admin-content'));
+}
+
+// ==================== 后台：开放平台 ====================
+const OPEN_CAPS = [
+    { key: 'get_info',     col: 'can_get_info',     label: '查询账号信息' },
+    { key: 'get_power',    col: 'can_get_power',    label: '查询电力' },
+    { key: 'checkin',      col: 'can_checkin',      label: '每日签到' },
+    { key: 'add_power',    col: 'can_add_power',    label: '增加电力' },
+    { key: 'deduct_power', col: 'can_deduct_power', label: '扣减电力' },
+];
+async function renderAdminOpen(el) {
+    const { data: accounts, error } = await sb.from('open_accounts').select('*').order('created_at', { ascending: false });
+    if (error) {
+        el.innerHTML = `<h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-4)">开放平台</h2>
+        <p class="text-secondary">${esc(errText(error, '加载失败：请先在 Supabase SQL Editor 运行开放平台 SQL 补丁'))}</p>`;
+        return;
+    }
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-4)">开放平台</h2>
+        <p class="text-secondary mb-8" style="font-size:.875rem">
+            为第三方模组 / AI 助手创建开放账号。每个账号有一个<b>公开 ID</b>（可对外展示）和一个<b>UID</b>（保密，创建时展示一次，之后可点「查看 UID」找回）。
+            第三方调用 <code>POST {window.APP_CONFIG.SUPABASE_URL}/rest/v1/rpc/open_api</code>，参数 <code>p_uid / p_action / p_username / p_amount</code>，
+            action 支持 ping、get_info、get_power、checkin、add_power、deduct_power。每个功能可单独开关，限频每小时 120 次。
+        </p>
+        <div class="mb-8"><button class="btn btn-primary" onclick="openCreateOpenAccount()">新建开放账号</button></div>
+        ${(accounts || []).map(a => `
+        <div class="card mb-8">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:var(--space-2)">
+                <div>
+                    <div style="font-weight:600">${esc(a.name)} <span class="badge ${a.status === 'active' ? 'badge-green' : 'badge-gray'}">${a.status === 'active' ? '启用中' : '已停用'}</span></div>
+                    <div class="text-secondary" style="font-size:.8125rem;margin-top:var(--space-1)">
+                        公开 ID：<code>${esc(a.public_id)}</code>
+                        ${a.bind_username ? ` · 绑定玩家：<b>${esc(a.bind_username)}</b>` : ' · 未绑定（调用时需指定玩家）'}
+                        · 已调用 ${a.call_count || 0} 次
+                    </div>
+                </div>
+                <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
+                    <button class="btn btn-sm btn-secondary" onclick="viewOpenUid('${a.id}')">查看 UID</button>
+                    <button class="btn btn-sm btn-secondary" onclick="showOpenLogs('${a.id}', '${esc(a.public_id)}')">调用日志</button>
+                    <button class="btn btn-sm ${a.status === 'active' ? 'btn-danger' : 'btn-primary'}" onclick="toggleOpenStatus('${a.id}', '${a.status === 'active' ? 'disabled' : 'active'}')">${a.status === 'active' ? '停用' : '启用'}</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteOpenAccount('${a.id}')">删除</button>
+                </div>
+            </div>
+            <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-3)">
+                ${OPEN_CAPS.map(c => `<button class="btn btn-sm ${a[c.col] ? 'btn-primary' : 'btn-secondary'}" onclick="toggleOpenCap('${a.id}', '${c.col}', ${!a[c.col]})" title="点击${a[c.col] ? '关闭' : '开启'}该功能">${a[c.col] ? '✓' : '✗'} ${c.label}</button>`).join('')}
+            </div>
+        </div>`).join('') || '<p class="text-secondary">还没有开放账号，点上面的按钮新建一个。</p>'}
+    `;
+}
+function openCreateOpenAccount() {
+    showModal('新建开放账号', `
+        <div class="form-group"><label class="form-label">应用名称（备注）</label><input class="input" id="oa-name" placeholder="例如 AI 签到助手"></div>
+        <div class="form-group"><label class="form-label">绑定玩家昵称（可选）</label><input class="input" id="oa-bind" placeholder="填了就只能操作这个玩家；留空 = 调用时指定任意玩家"></div>
+        <div class="form-group"><label class="form-label">开放功能（之后可随时开关）</label>
+            ${OPEN_CAPS.map(c => `<label style="display:block;margin-bottom:var(--space-1)"><input type="checkbox" id="oa-cap-${c.key}"> ${c.label}</label>`).join('')}
+        </div>`,
+        `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+         <button class="btn btn-primary" onclick="createOpenAccount()">创建</button>`);
+}
+async function createOpenAccount() {
+    const name = document.getElementById('oa-name').value.trim();
+    const bind = document.getElementById('oa-bind').value.trim();
+    if (!name) return toast('请填写应用名称', 'error');
+    const caps = {};
+    OPEN_CAPS.forEach(c => caps[c.key] = document.getElementById('oa-cap-' + c.key).checked);
+    const btn = document.querySelector('.modal-actions .btn-primary');
+    if (btn) { btn.disabled = true; btn.textContent = '创建中…'; }
+    const { data, error } = await sb.rpc('admin_create_open_account', { p_name: name, p_bind_username: bind, p_caps: caps });
+    if (error) {
+        if (btn) { btn.disabled = false; btn.textContent = '创建'; }
+        return toast(errText(error, '创建失败'), 'error');
+    }
+    document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+    showModal('开放账号已创建', `
+        <p class="mb-8">公开 ID：<code>${esc(data.public_id)}</code>（可对外展示）</p>
+        <p class="mb-8" style="font-weight:600;color:var(--color-danger)">UID 只展示这一次，请立即复制保存：</p>
+        <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4)">
+            <input class="input" id="oa-uid" readonly value="${esc(data.uid)}" style="font-family:monospace;font-size:.8125rem">
+            <button class="btn btn-secondary" onclick="copyOpenUid()">复制</button>
+        </div>
+        <p class="text-secondary" style="font-size:.8125rem">UID 已加密存储，忘了也能在列表里点「查看 UID」找回。</p>`,
+        `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove();renderAdminOpen(document.getElementById('admin-content'))">完成</button>`);
+}
+function copyOpenUid() {
+    const v = document.getElementById('oa-uid').value;
+    const ok = () => toast('已复制');
+    if (navigator.clipboard) navigator.clipboard.writeText(v).then(ok).catch(() => { document.getElementById('oa-uid').select(); document.execCommand('copy'); ok(); });
+    else { document.getElementById('oa-uid').select(); document.execCommand('copy'); ok(); }
+}
+async function viewOpenUid(id) {
+    const { data, error } = await sb.rpc('admin_view_open_uid', { p_account: id });
+    if (error) return toast(errText(error, '读取失败'), 'error');
+    showModal('UID', `
+        <div style="display:flex;gap:var(--space-2)">
+            <input class="input" id="oa-uid" readonly value="${esc(data)}" style="font-family:monospace;font-size:.8125rem">
+            <button class="btn btn-secondary" onclick="copyOpenUid()">复制</button>
+        </div>`,
+        `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">关闭</button>`);
+}
+async function toggleOpenCap(id, col, val) {
+    const { error } = await sb.from('open_accounts').update({ [col]: val }).eq('id', id);
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    renderAdminOpen(document.getElementById('admin-content'));
+}
+async function toggleOpenStatus(id, status) {
+    const { error } = await sb.from('open_accounts').update({ status }).eq('id', id);
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    toast(status === 'active' ? '已启用' : '已停用');
+    renderAdminOpen(document.getElementById('admin-content'));
+}
+async function deleteOpenAccount(id) {
+    if (!confirm('确定删除该开放账号？使用它的第三方将立即失效。')) return;
+    const { error } = await sb.from('open_accounts').delete().eq('id', id);
+    if (error) return toast(errText(error, '删除失败'), 'error');
+    toast('已删除');
+    renderAdminOpen(document.getElementById('admin-content'));
+}
+async function showOpenLogs(id, pubId) {
+    const { data: logs } = await sb.from('open_api_logs').select('*').eq('account_id', id).order('created_at', { ascending: false }).limit(20);
+    showModal(`调用日志 · ${pubId}（最近 20 条）`, `
+        ${(logs || []).map(l => `<div style="padding:var(--space-2) 0;border-bottom:1px solid var(--color-border);font-size:.8125rem">
+            <span style="color:${l.ok ? 'var(--color-success)' : 'var(--color-danger)'}">${l.ok ? '✓' : '✗'}</span>
+            <b>${esc(l.action)}</b>
+            ${l.target_username ? ' · ' + esc(l.target_username) : ''}
+            ${l.amount != null ? ' · ' + l.amount : ''}
+            ${!l.ok && l.err ? ' · ' + esc(l.err) : ''}
+            <span class="text-secondary" style="float:right">${new Date(l.created_at).toLocaleString('zh-CN')}</span>
+        </div>`).join('') || '<p class="text-secondary">还没有调用记录。</p>'}`,
+        `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">关闭</button>`);
 }
 
 // ==================== 后台：AI 配置 ====================
