@@ -817,7 +817,7 @@ const ListCache = {
 };
 
 // ==================== 页面：电力 ====================
-const POWER_NOTICE = '当前暂未开通电力兑换，但是后期会开放，大家可以先积攒电力，后期兑换。';
+const POWER_NOTICE = '电力兑换将通过游戏内模组开放，模组制作中，上线后将在本页通知；期间电力正常累积、不清零。开放平台接口已上线，第三方应用可申请接入，管理员可在后台「开放平台」创建账号。';
 
 async function renderPower(app) {
     if (!requireLogin()) return;
@@ -836,15 +836,21 @@ async function renderPower(app) {
             <p class="text-tertiary" style="margin-top:.75rem;font-size:.8125rem">每天可领一次，新用户注册赠送 5000 电力</p>
         </div>
 
-        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">获取规则</h3>
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">任务列表</h3>
         <div class="power-rules mb-8">
-            <div class="card"><div class="form-label">每日登录</div><p class="text-secondary" style="font-size:.875rem">每天首次签到获得 <strong>100</strong> 电力</p></div>
-            <div class="card"><div class="form-label">新用户注册</div><p class="text-secondary" style="font-size:.875rem">完成注册获得 <strong>5000</strong> 电力（一次性）</p></div>
+            <div class="card power-task-card"><div><div class="form-label">每日登录</div><p class="text-secondary" style="font-size:.8125rem">每天首次签到</p></div><span class="power-task-reward">+100</span></div>
+            <div class="card power-task-card"><div><div class="form-label">新用户注册</div><p class="text-secondary" style="font-size:.8125rem">完成注册（一次性）</p></div><span class="power-task-reward">+5000</span></div>
+            <div class="card power-task-card"><div><div class="form-label">上传游戏实录</div><p class="text-secondary" style="font-size:.8125rem">上传截图并通过审核，每次通过</p></div><span class="power-task-reward">+500</span></div>
+            <div class="card power-task-card"><div><div class="form-label">发布社区帖子</div><p class="text-secondary" style="font-size:.8125rem">在论坛发帖，每日首次</p></div><span class="power-task-reward">+600</span></div>
+            <div class="card power-task-card"><div><div class="form-label">发送社区私信</div><p class="text-secondary" style="font-size:.8125rem">给任意玩家发消息，每日首次</p></div><span class="power-task-reward">+100</span></div>
         </div>
 
         <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">我的邀请码</h3>
         <div class="card mb-8">
-            <p class="text-secondary" style="font-size:.875rem;margin-bottom:.75rem">把邀请码分享给好友，好友注册时填写（选填）即可建立邀请关系。</p>
+            <p class="text-secondary" style="font-size:.875rem;margin-bottom:.75rem">每成功邀请 1 位好友注册，你获得
+                <span style="text-decoration:line-through;opacity:.55;font-weight:600">5000</span>
+                <strong style="color:var(--color-accent);font-size:1.15em">10000</strong>
+                电力（立即到账）。把邀请码分享给好友，好友注册时填写（选填）即可建立邀请关系。</p>
             <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
                 <div style="font-size:2rem;font-weight:700;letter-spacing:.35em;color:var(--color-accent)" id="my-invite-code">———</div>
                 <span class="badge badge-gray">已邀请 <strong id="my-invite-count">0</strong> 人</span>
@@ -884,7 +890,7 @@ async function refreshPowerPanel() {
         btn.textContent = claimed ? '今日已签到' : '每日签到领取 100 电力';
     }
 
-    const KIND = { newuser: '新用户注册', daily: '每日登录', admin: '管理员调整', manual: '其他' };
+    const KIND = { newuser: '新用户注册', daily: '每日登录', admin: '管理员调整', manual: '其他', record: '游戏实录', post: '社区帖子', message: '社区私信', invite: '邀请好友' };
     listEl.innerHTML = (logs || []).length
         ? `<table class="data-table"><thead><tr><th>时间</th><th>类型</th><th>数量</th><th>说明</th></tr></thead>
            <tbody>${logs.map(l => `<tr>

@@ -655,10 +655,12 @@ end $$;
 grant execute on function public.regenerate_invite_code() to authenticated;
 
 -- 注册时绑定邀请人（选填；幂等，重复绑定返回原结果）
+-- 邀请奖励：每成功邀请 1 位好友注册，邀请人获得 10000 电力（一次性）
 create or replace function public.bind_inviter(p_code text)
 returns boolean language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid();
 declare inviter uuid;
+declare invite_reward integer := 10000;
 begin
   if uid is null then raise exception 'not authorized'; end if;
   if p_code is null or trim(p_code) = '' then return false; end if;
@@ -678,6 +680,11 @@ begin
   update public.profiles
   set invited_by = inviter, invite_count = coalesce(invite_count, 0) + 1
   where id = inviter;
+
+  insert into public.power_logs (user_id, amount, kind, note)
+  values (inviter, invite_reward, 'invite', '成功邀请好友注册');
+  update public.profiles set power = coalesce(power, 0) + invite_reward where id = inviter;
+
   return true;
 end $$;
 grant execute on function public.bind_inviter(text) to authenticated;
@@ -1083,3 +1090,71 @@ begin
   return res;
 end $$;
 grant execute on function public.open_api(text, text, text, integer) to anon, authenticated;
+
+-- ============================================================
+-- 25. 电力任务系统（2026-10-23）
+--   游戏实录审核通过 +500（每次通过均奖励）
+--   论坛发帖 +600（每日首次，按北京时间去重）
+--   发送社区私信 +100（每日首次，按北京时间去重）
+--   邀请奖励 10000/人（见第 22 节 bind_inviter，已改为实际发放）
+-- ============================================================
+
+-- 游戏实录：审核通过（非 approved → approved）奖励 500
+create or replace function public.award_record_power()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare amt integer := 500;
+begin
+  if new.status = 'approved' and old.status is distinct from 'approved' then
+    insert into public.power_logs (user_id, amount, kind, note)
+    values (new.user_id, amt, 'record', '游戏实录审核通过');
+    update public.profiles set power = coalesce(power, 0) + amt where id = new.user_id;
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_record_power on public.game_records;
+create trigger trg_record_power after update of status on public.game_records
+  for each row execute function public.award_record_power();
+
+-- 论坛发帖：每日首次发帖奖励 600
+create or replace function public.award_post_power()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare today date := (now() at time zone 'Asia/Shanghai')::date;
+declare amt integer := 600;
+begin
+  if exists (
+    select 1 from public.power_logs
+    where user_id = new.user_id and kind = 'post'
+      and (created_at at time zone 'Asia/Shanghai')::date = today
+  ) then
+    return new;
+  end if;
+  insert into public.power_logs (user_id, amount, kind, note)
+  values (new.user_id, amt, 'post', '发布社区帖子');
+  update public.profiles set power = coalesce(power, 0) + amt where id = new.user_id;
+  return new;
+end $$;
+drop trigger if exists trg_post_power on public.posts;
+create trigger trg_post_power after insert on public.posts
+  for each row execute function public.award_post_power();
+
+-- 社区私信：每日首次发送奖励 100
+create or replace function public.award_message_power()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare today date := (now() at time zone 'Asia/Shanghai')::date;
+declare amt integer := 100;
+begin
+  if exists (
+    select 1 from public.power_logs
+    where user_id = new.sender_id and kind = 'message'
+      and (created_at at time zone 'Asia/Shanghai')::date = today
+  ) then
+    return new;
+  end if;
+  insert into public.power_logs (user_id, amount, kind, note)
+  values (new.sender_id, amt, 'message', '发送社区私信');
+  update public.profiles set power = coalesce(power, 0) + amt where id = new.sender_id;
+  return new;
+end $$;
+drop trigger if exists trg_message_power on public.messages;
+create trigger trg_message_power after insert on public.messages
+  for each row execute function public.award_message_power();
