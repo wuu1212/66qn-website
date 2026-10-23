@@ -41,6 +41,12 @@ const APP = {
                 if (session) await this.loadProfile(session.user.id);   // 只刷新用户名/头像
                 return;
             }
+            if (event === 'PASSWORD_RECOVERY') {
+                // 邮件里的重置链接回调：supabase-js 已接住 token，直接进设置新密码页
+                if (session) await this.loadProfile(session.user.id);
+                location.hash = '#/setpwd';
+                return;
+            }
             if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
                 if (session) {
                     await this.loadProfile(session.user.id);
@@ -126,6 +132,8 @@ const APP = {
             case '/register': renderRegister(app); break;
             case '/apply': renderApply(app); break;
             case '/verify': renderVerify(app, params[0] ? decodeURIComponent(params[0]) : ''); break;
+            case '/reset': renderReset(app); break;
+            case '/setpwd': renderSetPassword(app); break;
             case '/profile': renderProfile(app, params[0] || (this.user && this.user.id)); break;
             case '/admin':
                 if (!this.isAdmin) { toast('需要管理员权限', 'error'); location.hash = '#/'; return; }
@@ -1659,7 +1667,7 @@ async function copyMessage(msgId) {
 
 // ==================== 页面：登录 / 注册 ====================
 // 登录 / 注册 / 申请 / 邮箱验证这四页共用右侧主城实拍图
-const AUTH_ROUTES = { '/login': true, '/register': true, '/apply': true, '/verify': true };
+const AUTH_ROUTES = { '/login': true, '/register': true, '/apply': true, '/verify': true, '/reset': true, '/setpwd': true };
 
 function mountAuthVisual(app) {
     const page = app.querySelector('.auth-page');
@@ -1688,6 +1696,7 @@ function renderLogin(app) {
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doLogin()">登录</button>
         <p class="auth-link">还没有账号？<a href="#/register">邮箱注册</a> · <a href="#/apply">申请账号</a>（无需邮箱）</p>
         <p class="auth-link">已注册但没收到验证码？<a href="#/verify">去验证邮箱</a></p>
+        <p class="auth-link">忘记密码？<a href="#/reset">看重置方式</a></p>
     </div>`;
 }
 
@@ -1971,6 +1980,8 @@ async function renderProfile(app, userId) {
     if (!user) { app.innerHTML = '<div class="container" style="padding:var(--space-16);text-align:center">用户不存在</div>'; return; }
     const { data: posts } = await sb.from('posts').select('*').eq('user_id', userId).eq('status', 'published').order('created_at', { ascending: false });
     const isMe = APP.user && APP.user.id === userId;
+    const ids = isMe ? await myIdentities() : null;
+    const ghBound = !!(ids || []).find(i => i.provider === 'github');
 
     app.innerHTML = `
     <div class="container" style="max-width:640px;margin:0 auto;padding:var(--space-8) var(--space-6)">
@@ -1988,9 +1999,42 @@ async function renderProfile(app, userId) {
         </div>
         ${isMe ? `
         <div class="card mb-8">
+            <h3 class="pc-card-title">资料</h3>
+            <div class="form-group"><label class="form-label">用户名</label>
+                <input class="input" value="${esc(user.username)}" disabled>
+                <p class="text-tertiary" style="font-size:.75rem;margin-top:.35rem">用户名不能自己改，需要改请联系管理员</p></div>
+            <div class="form-group"><label class="form-label">游戏 ID</label>
+                <input class="input" id="my-game-id" value="${esc(user.game_id || '')}" maxlength="32" placeholder="进服用的游戏 ID">
+                <button class="btn btn-secondary btn-sm" style="margin-top:.5rem" onclick="saveGameId()">保存游戏 ID</button></div>
             <div class="form-group"><label class="form-label">个人简介</label>
-                <textarea class="textarea" id="my-bio" rows="2" maxlength="200">${esc(user.bio || '')}</textarea></div>
-            <button class="btn btn-primary btn-sm" onclick="saveBio()">保存简介</button>
+                <textarea class="textarea" id="my-bio" rows="2" maxlength="200">${esc(user.bio || '')}</textarea>
+                <button class="btn btn-secondary btn-sm" style="margin-top:.5rem" onclick="saveBio()">保存简介</button></div>
+        </div>
+
+        <div class="card mb-8">
+            <h3 class="pc-card-title">账号安全</h3>
+            <div class="pc-row">
+                <div><div class="pc-row-label">登录邮箱</div>
+                    <div class="pc-row-value">${esc((APP.user && APP.user.email) || '未绑定')}</div></div>
+                <button class="btn btn-ghost btn-sm" onclick="changeMyEmailFlow()">修改</button>
+            </div>
+            <div class="pc-row">
+                <div><div class="pc-row-label">登录密码</div>
+                    <div class="pc-row-value">••••••••</div></div>
+                <button class="btn btn-ghost btn-sm" onclick="changeMyPasswordFlow()">修改</button>
+            </div>
+            <div class="pc-row">
+                <div><div class="pc-row-label">GitHub 授权</div>
+                    <div class="pc-row-value">${ghBound ? '已绑定，可用 GitHub 登录' : '未绑定'}</div></div>
+                ${ghBound
+                    ? `<span style="display:flex;gap:.5rem"><button class="btn btn-ghost btn-sm" onclick="githubBindFlow()">换个 GitHub</button><button class="btn btn-ghost btn-sm" onclick="githubUnbindFlow()">解绑</button></span>`
+                    : `<button class="btn btn-ghost btn-sm" onclick="githubBindFlow()">绑定</button>`}
+            </div>
+        </div>
+
+        <div class="card mb-8">
+            <h3 class="pc-card-title">已授权的 AI</h3>
+            <div id="my-grants">${loadingBlock()}</div>
         </div>` : ''}
         <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">发布的帖子</h3>
         <div class="card" style="padding:0;overflow:hidden">
@@ -2003,6 +2047,7 @@ async function renderProfile(app, userId) {
                 </div>`).join('')}
         </div>
     </div>`;
+    if (isMe) loadMyGrants(document.getElementById('my-grants'));
 }
 
 async function saveBio() {
@@ -2011,6 +2056,240 @@ async function saveBio() {
     if (error) return toast(errText(error, '保存失败'), 'error');
     APP.user.bio = bio;
     toast('简介已保存');
+}
+
+async function saveGameId() {
+    const el = document.getElementById('my-game-id');
+    const gameId = el.value.trim();
+    if (gameId.length < 2) return toast('游戏 ID 至少 2 个字符', 'error');
+    const { error } = await sb.from('profiles').update({ game_id: gameId }).eq('id', APP.user.id);
+    if (error) return toast(errText(error, '保存失败'), 'error');
+    APP.user.game_id = gameId;
+    toast('游戏 ID 已保存');
+}
+
+// ==================== 忘记密码 / 重置密码 ====================
+async function renderReset(app) {
+    const info = await Settings.load();
+    const enabled = !!(info.site && info.site.email_reset_enabled === true);
+    const groupUrl = (info.site && info.site.qq_group) || 'https://qm.qq.com/q/bZNAGK8Rs4';
+    app.innerHTML = `
+    <div class="auth-page page-enter">
+        <h1 class="auth-title">忘记密码</h1>
+        <p class="auth-subtitle">${enabled ? '输入注册邮箱，我们给你发一条重置链接' : '目前由管理员协助重置'}</p>
+        ${enabled ? `
+        <div class="form-group"><label class="form-label">注册邮箱</label>
+            <input class="input" id="rs-email" type="email" placeholder="注册时填的邮箱" autocomplete="email"></div>
+        <button class="btn btn-primary btn-lg" style="width:100%" onclick="sendResetLink()">发送重置链接</button>
+        <p class="auth-link">没收到先去垃圾邮件看看；仍没有就 <a href="#/reset">过两分钟再发一次</a></p>` : `
+        <div class="apply-notice">
+            <p><strong>请联系管理员重置</strong></p>
+            <p class="text-tertiary">把「用户名 + 注册邮箱 + 游戏 ID」发到 QQ 群，管理员核对身份后会给你一个新的临时密码，登录后请立刻在个人中心里改掉。</p>
+        </div>
+        <a class="btn btn-primary btn-lg" style="width:100%;display:flex;align-items:center;justify-content:center" href="${esc(groupUrl)}" target="_blank" rel="noopener">加入 QQ 群找管理员</a>`}
+        <p class="auth-link"><a href="#/login">返回登录</a></p>
+    </div>`;
+}
+
+async function sendResetLink() {
+    const email = document.getElementById('rs-email').value.trim();
+    if (!email.includes('@')) return toast('请输入邮箱地址', 'error');
+    const redirectTo = location.origin + location.pathname + '#/setpwd';
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo });
+    if (error) return toast(errText(error, '发送失败，请稍后再试或联系管理员'), 'error');
+    toast('重置链接已发送，请查收邮箱（含垃圾邮件箱）');
+}
+
+// 邮件链接回调、以及个人中心里手动进入都用这一页
+function renderSetPassword(app) {
+    if (!APP.user) { location.hash = '#/login'; return; }
+    app.innerHTML = `
+    <div class="auth-page page-enter">
+        <h1 class="auth-title">设置新密码</h1>
+        <p class="auth-subtitle">给 @${esc(APP.user.username)} 设置一个新密码</p>
+        <div class="form-group"><label class="form-label">新密码 <span class="text-tertiary">(至少 6 位)</span></label>
+            <input class="input" id="np-1" type="password" placeholder="输入新密码" autocomplete="new-password"></div>
+        <div class="form-group"><label class="form-label">再输一遍</label>
+            <input class="input" id="np-2" type="password" placeholder="确认新密码" autocomplete="new-password"></div>
+        <button class="btn btn-primary btn-lg" style="width:100%" onclick="submitNewPassword()">保存新密码</button>
+        <p class="auth-link"><a href="#/profile">返回个人中心</a></p>
+    </div>`;
+}
+
+async function submitNewPassword() {
+    const p1 = document.getElementById('np-1').value;
+    const p2 = document.getElementById('np-2').value;
+    if (p1.length < 6) return toast('密码至少 6 位', 'error');
+    if (p1 !== p2) return toast('两次输入的密码不一致', 'error');
+    const { error } = await sb.auth.updateUser({ password: p1 });
+    if (error) {
+        if (/recent|sign[- ]?in|reauthenticate/i.test(error.message || '')) {
+            return toast('这太久没重新登录了：请先退出登录再进一次，然后到个人中心改密码', 'error');
+        }
+        return toast(errText(error, '修改失败，请稍后再试'), 'error');
+    }
+    showPasswordDone(p1);
+}
+
+// 改密成功后强制退出：退出前把新密码再显示一次并给复制，避免"改完就锁死"
+function showPasswordDone(pw) {
+    showModal('密码已修改', `
+        <p class="text-secondary" style="font-size:.875rem">下面这行就是你的新密码，现在复制一份存好。点「退出登录」后必须用它才能再进来。</p>
+        <div class="flex-center" style="gap:var(--space-3);margin-top:var(--space-4)">
+            <code style="flex:1;font-size:.9375rem;background:var(--color-bg-tertiary);padding:.6rem .75rem;border-radius:6px;word-break:break-all">${esc(pw)}</code>
+            <button class="btn btn-secondary btn-sm" onclick="copyText('${esc(pw)}').then(()=>toast('已复制'))">复制</button>
+        </div>`,
+        `<button class="btn btn-primary" onclick="document.querySelector('.modal-overlay').remove();doLogout()">我已存好，退出登录</button>`);
+}
+
+// ==================== 带旧密码校验的二次确认 ====================
+// 用一次独立的 password grant 请求验证旧密码；不经过 supabase-js，当前会话不受影响。
+function verifyPassword(email, password) {
+    return fetch(CFG.SUPABASE_URL + '/auth/v1/token?grant_type=password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: CFG.SUPABASE_ANON_KEY, Authorization: 'Bearer ' + CFG.SUPABASE_ANON_KEY },
+        body: JSON.stringify({ email, password })
+    }).then(r => r.ok);
+}
+
+function confirmWithPassword(desc, onPass) {
+    const id = 'cwp-' + Date.now();
+    const overlay = showModal('身份确认', `
+        <p class="text-secondary" style="font-size:.875rem">${desc}</p>
+        <div class="form-group" style="margin-top:var(--space-4)"><label class="form-label">输入当前登录密码以确认</label>
+            <input class="input" id="${id}" type="password" placeholder="当前密码" autocomplete="current-password"></div>`,
+        `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+         <button class="btn btn-primary" onclick="runConfirmPassword('${id}')">确认</button>`);
+    window.__cwp = { overlay, onPass };
+}
+
+async function runConfirmPassword(inputId) {
+    const pw = document.getElementById(inputId).value;
+    if (!pw) return toast('请输入当前密码', 'error');
+    const email = APP.user && APP.user.email;
+    if (!email) return toast('这个账号没有绑定邮箱，无法这样确认，请联系管理员', 'error');
+    const ok = await verifyPassword(email, pw);
+    if (!ok) return toast('当前密码不正确', 'error');
+    const ctx = window.__cwp;
+    if (ctx && ctx.overlay) ctx.overlay.remove();
+    if (ctx && ctx.onPass) await ctx.onPass(pw);
+    window.__cwp = null;
+}
+
+// ==================== 个人中心：账号安全 ====================
+async function changeMyEmailFlow() {
+    const cur = (APP.user && APP.user.email) || '未绑定';
+    const id = 'ce-' + Date.now();
+    showModal('修改登录邮箱', `
+        <p class="text-secondary" style="font-size:.875rem">当前邮箱：<code>${esc(cur)}</code></p>
+        <div class="form-group" style="margin-top:var(--space-4)"><label class="form-label">新邮箱</label>
+            <input class="input" id="${id}" type="email" placeholder="输入新邮箱" autocomplete="email"></div>
+        <p class="text-tertiary" style="font-size:.8125rem;line-height:1.7">会向新邮箱发一封确认信，<strong>在你点确认之前，旧邮箱仍然是登录凭据</strong>。确认信没到的话，改动作废，不会有中间状态。</p>`,
+        `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+         <button class="btn btn-primary" onclick="applyNewEmail('${id}')">发送确认信</button>`);
+}
+
+async function applyNewEmail(inputId) {
+    const email = document.getElementById(inputId).value.trim();
+    if (!email.includes('@')) return toast('请输入有效邮箱', 'error');
+    const { error } = await sb.auth.updateUser({
+        email,
+        options: { redirectTo: location.origin + location.pathname + '#/verify' }
+    });
+    if (error) return toast(errText(error, '修改失败'), 'error');
+    document.querySelector('.modal-overlay').remove();
+    toast('确认信已发往新邮箱，去点一下才算改成功');
+    setTimeout(doLogout, 1500);
+}
+
+function changeMyPasswordFlow() {
+    confirmWithPassword('你要修改登录密码。改完当前会话会被退出，之后必须用新密码登录。', async () => {
+        location.hash = '#/setpwd';
+    });
+}
+
+async function myIdentities() {
+    if (typeof sb.auth.userIdentities !== 'function') return null;
+    const { data, error } = await sb.auth.userIdentities();
+    return error ? null : (data || []);
+}
+
+async function githubBindFlow() {
+    if (typeof sb.auth.linkIdentity !== 'function') return toast('当前 supabase-js 版本不支持绑定，请在 Supabase 控制台处理', 'error');
+    const ids = await myIdentities();
+    if (ids && ids.some(i => i.provider === 'github')) return toast('这个账号已经绑过 GitHub 了');
+    if (!confirm('将跳转到 GitHub 授权。授权成功后，这个 GitHub 账号会和当前账号绑定，之后可以任选一种方式登录。')) return;
+    const { error } = await sb.auth.linkIdentity({
+        provider: 'github',
+        options: { redirectTo: location.origin + location.pathname }
+    });
+    if (error) toast(errText(error, '绑定失败：请确认 Supabase 已开启 GitHub 提供方'), 'error');
+}
+
+async function githubUnbindFlow() {
+    const ids = await myIdentities();
+    if (!ids) return toast('当前 supabase-js 版本不支持解绑，请在后台处理', 'error');
+    const gh = ids.find(i => i.provider === 'github');
+    if (!gh) return toast('这个账号没有绑定 GitHub', 'error');
+    const others = ids.filter(i => i.provider !== 'github');
+    if (!others.length) return toast('这是该账号唯一的登录方式，解掉就进不去了。请先在上方设置邮箱和密码。', 'error');
+    confirmWithPassword('你要解绑 GitHub。解绑后只能用邮箱密码登录，请确认邮箱密码都能正常用。', async () => {
+        const { error } = await sb.auth.unlinkIdentity(gh);
+        if (error) return toast(errText(error, '解绑失败'), 'error');
+        toast('GitHub 已解绑');
+        renderProfile(document.getElementById('app'), APP.user.id);
+    });
+}
+
+// ==================== 个人中心：已授权的 AI ====================
+async function loadMyGrants(el) {
+    if (!el) return;
+    const { data, error } = await sb.rpc('my_ai_grants');
+    if (error) { el.innerHTML = `<p class="text-secondary" style="font-size:.875rem">读取失败：${esc(errText(error, '请确认已执行个人中心 SQL 补丁'))}</p>`; return; }
+    if (!data || !data.length) {
+        el.innerHTML = `<p class="text-secondary" style="font-size:.875rem">还没有授权出去的应用。到 <a href="#/skill">AI 技能</a> 页领取授权码，把它交给你的 AI 即可。</p>`;
+        return;
+    }
+    el.innerHTML = `
+        <table class="grant-table">
+            <thead><tr><th>应用</th><th>权限</th><th>调用</th><th>状态</th><th></th></tr></thead>
+            <tbody>${data.map(g => {
+                const perms = [g.can_checkin && '签到', g.can_get_power && '查电力', g.can_get_info && '查信息'].filter(Boolean).join('、') || '无';
+                const on = g.status === 'active';
+                return `<tr>
+                    <td><div style="font-weight:500">${esc(g.name)}</div>
+                        <div class="text-tertiary" style="font-size:.75rem">${esc(g.public_id)} · ${timeAgo(g.created_at)}领${g.install_rewarded ? ' · 奖励已发' : ''}</div></td>
+                    <td class="text-secondary" style="font-size:.8125rem">${esc(perms)}</td>
+                    <td><div style="font-size:.8125rem">${g.call_count || 0} 次</div>
+                        <div class="text-tertiary" style="font-size:.75rem">${g.last_call_at ? timeAgo(g.last_call_at) + '调用' : '尚未调用'}</div></td>
+                    <td><span class="badge ${on ? 'badge-green' : 'badge-gray'}">${on ? '生效中' : '已停用'}</span></td>
+                    <td style="text-align:right;white-space:nowrap">
+                        <button class="btn btn-ghost btn-sm" onclick="showMyUid()">看授权码</button>
+                        <button class="btn btn-ghost btn-sm" onclick="toggleMyGrant('${esc(g.public_id)}', ${on ? 'false' : 'true'})">${on ? '停用' : '启用'}</button>
+                    </td></tr>`;
+            }).join('')}</tbody>
+        </table>
+        <p class="text-tertiary" style="font-size:.75rem;margin-top:var(--space-4)">停用只是让这把授权码失效，记录还在，随时可以重新启用。</p>`;
+}
+
+async function toggleMyGrant(publicId, enable) {
+    if (!enable && !confirm('停用后，那个 AI 立刻调不动你的账号（签到、查电力都会失败）。可以重新启用。确定停用？')) return;
+    const { data, error } = await sb.rpc('set_my_ai_grant', { p_public_id: publicId, p_enabled: enable });
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    if (!data) return toast('没找到属于你的这条授权', 'error');
+    toast(enable ? '已启用' : '已停用');
+    loadMyGrants(document.getElementById('my-grants'));
+}
+
+async function showMyUid() {
+    const { data, error } = await sb.rpc('view_my_open_uid');
+    if (error) return toast(errText(error, '读取失败'), 'error');
+    if (!data) return toast('你还没有领取授权码', 'error');
+    showModal('我的授权码', `
+        <p class="text-secondary" style="font-size:.875rem">这是你专属的授权码，相当于交给 AI 的钥匙，别贴到公开场合。</p>
+        <code style="display:block;font-size:.9375rem;background:var(--color-bg-tertiary);padding:.75rem;border-radius:6px;word-break:break-all;margin-top:var(--space-4)">${esc(data)}</code>`,
+        `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">关闭</button>
+         <button class="btn btn-primary" onclick="copyText('${esc(data)}').then(()=>toast('授权码已复制'))">复制</button>`);
 }
 
 // ==================== 页面：管理后台 ====================
@@ -2102,13 +2381,54 @@ async function renderAdminUsers(el) {
                         <td><span class="badge ${u.role === 'admin' ? 'badge-blue' : 'badge-gray'}">${u.role}</span></td>
                         <td><span class="badge ${u.status === 'active' ? 'badge-green' : 'badge-red'}">${u.status === 'active' ? '正常' : '已封禁'}</span></td>
                         <td class="text-tertiary">${timeAgo(u.created_at)}</td>
-                        <td>${u.id !== APP.user.id ? `
+                        <td><button class="btn btn-ghost btn-sm" onclick="adminResetPasswordFlow('${u.id}','${esc(u.username)}')">重置密码</button>
+                            ${u.id !== APP.user.id ? `
                             <button class="btn btn-ghost btn-sm" onclick="adminToggleBan('${u.id}','${u.status}')">${u.status === 'active' ? '撤销资格' : '恢复资格'}</button>
-                            <button class="btn btn-ghost btn-sm" onclick="adminSetRole('${u.id}','${u.role === 'admin' ? 'user' : 'admin'}')">${u.role === 'admin' ? '取消管理' : '设为管理'}</button>` : '<span class="text-tertiary">本人</span>'}
+                            <button class="btn btn-ghost btn-sm" onclick="adminSetRole('${u.id}','${u.role === 'admin' ? 'user' : 'admin'}')">${u.role === 'admin' ? '取消管理' : '设为管理'}</button>` : ''}
                         </td>
                     </tr>`).join('')}</tbody>
             </table>
         </div>`;
+}
+
+// 忘记密码的兜底通道：管理员直接给用户设一个新密码，不走邮件
+function randPassword() {
+    const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    const buf = new Uint32Array(9);
+    if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(buf);
+    else for (let i = 0; i < buf.length; i++) buf[i] = Math.floor(Math.random() * 4294967296);
+    let s = '';
+    for (let i = 0; i < buf.length; i++) s += abc[buf[i] % abc.length];
+    return s.slice(0, 4) + '-' + s.slice(4);
+}
+
+function adminResetPasswordFlow(uid, username) {
+    const id = 'arp-' + Date.now();
+    showModal('重置密码', `
+        <p class="text-secondary" style="font-size:.875rem">给 <strong>${esc(username)}</strong> 设置一个新密码。玩家拿到的这串要当场复制发给他，之后你自己也看不到。</p>
+        <div class="form-group" style="margin-top:var(--space-4)"><label class="form-label">新密码（至少 6 位）</label>
+            <div class="flex-center" style="gap:var(--space-3)">
+                <input class="input" id="${id}" value="${randPassword()}">
+                <button class="btn btn-secondary btn-sm" onclick="document.getElementById('${id}').value=randPassword()">换一组</button>
+            </div></div>
+        <p class="text-tertiary" style="font-size:.75rem">注意：这不会踢掉该玩家其他设备上的旧会话，对方登录态会自然过期。</p>`,
+        `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+         <button class="btn btn-primary" onclick="applyAdminReset('${uid}','${id}','${esc(username)}')">确认重置</button>`);
+}
+
+async function applyAdminReset(uid, inputId, username) {
+    const pw = document.getElementById(inputId).value.trim();
+    if (pw.length < 6) return toast('密码至少 6 位', 'error');
+    const { data, error } = await sb.rpc('admin_reset_password', { p_user_id: uid, p_new_password: pw });
+    if (error) return toast(errText(error, '重置失败：请确认已执行个人中心 SQL 补丁'), 'error');
+    document.querySelector('.modal-overlay').remove();
+    showModal('已重置', `
+        <p class="text-secondary" style="font-size:.875rem"><strong>${esc(data || username)}</strong> 的新密码是下面这行，复制发给他，并提醒他登录后立刻去个人中心改掉。</p>
+        <div class="flex-center" style="gap:var(--space-3);margin-top:var(--space-4)">
+            <code style="flex:1;font-size:.9375rem;background:var(--color-bg-tertiary);padding:.6rem .75rem;border-radius:6px;word-break:break-all">${esc(pw)}</code>
+            <button class="btn btn-secondary btn-sm" onclick="copyText('${esc(pw)}').then(()=>toast('已复制'))">复制</button>
+        </div>`,
+        `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">知道了</button>`);
 }
 
 async function adminToggleBan(uid, current) {
@@ -2240,12 +2560,16 @@ async function renderAdminAnnouncement(el) {
       <div class="form-group"><label class="form-label">公告内容</label><textarea class="textarea" id="ann-text" rows="4">${esc(s.announcement || '')}</textarea></div>
       <div class="form-group"><label class="form-label">详情链接（可选）</label><input class="input" id="ann-url" value="${esc(s.announcement_url || '')}"></div>
       <label class="flex-center gap-4"><input id="ann-enabled" type="checkbox" ${s.announcement_enabled !== false ? 'checked' : ''}> 启用公告</label>
+      <div style="border-top:1px solid var(--color-border);margin-top:var(--space-6);padding-top:var(--space-5)">
+        <label class="flex-center gap-4"><input id="ann-emailreset" type="checkbox" ${s.email_reset_enabled === true ? 'checked' : ''}> 开放「忘记密码」邮件自助重置</label>
+        <p class="text-tertiary" style="font-size:.75rem;margin-top:.4rem;line-height:1.7">只有确认阿里云 SMTP 已经能正常收信之后再打开。没打开时，登录页的「忘记密码」走管理员后台重置。</p>
+      </div>
       <button class="btn btn-primary" style="margin-top:1rem" onclick="saveAnnouncement()">保存公告</button></div>`;
     draftBind('announcement', ['ann-text', 'ann-url', 'ann-enabled']);
 }
 async function saveAnnouncement() {
     const { data } = await sb.from('server_settings').select('value').eq('key','site').maybeSingle();
-    const value = {...(data?.value || {}), announcement: document.getElementById('ann-text').value.trim(), announcement_url: document.getElementById('ann-url').value.trim(), announcement_enabled: document.getElementById('ann-enabled').checked};
+    const value = {...(data?.value || {}), announcement: document.getElementById('ann-text').value.trim(), announcement_url: document.getElementById('ann-url').value.trim(), announcement_enabled: document.getElementById('ann-enabled').checked, email_reset_enabled: document.getElementById('ann-emailreset').checked};
     const { error } = await sb.from('server_settings').upsert({key:'site', value, updated_at:new Date().toISOString()});
     if (error) return toast(errText(error, '公告保存失败'), 'error'); Settings.cache = null; refreshAnnouncement(); draftClear('announcement'); toast('公告已保存');
 }
