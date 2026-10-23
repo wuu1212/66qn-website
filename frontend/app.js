@@ -166,6 +166,9 @@ async function refreshAnnouncement() {
 
 // ==================== 工具函数 ====================
 function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+
+// 描述文本渲染：**词语** → 蓝底加粗强调（先转义防 XSS，再做替换）
+function mdEmphasis(s) { return esc(s || '').replace(/\*\*(.+?)\*\*/g, '<strong class="md-hl">$1</strong>'); }
 function timeAgo(t) {
     const ts = typeof t === 'number' ? t : new Date(t).getTime();
     const diff = Date.now() - ts;
@@ -1099,32 +1102,7 @@ async function renderDownload(app) {
         <p class="text-secondary mb-8">这里提供进入 66qn 所需的启动器，以及本站自有的整合模组。</p>
 
         <h2 class="dl-section-title">启动器</h2>
-        <div style="display:flex;flex-direction:column;gap:var(--space-4)">
-            <div class="card launcher-card">
-                <div class="launcher-info">
-                    <h3>HMCL <span class="text-tertiary" style="font-weight:400">(Hello Minecraft! Launcher)</span></h3>
-                    <p>跨平台、功能丰富的 Java 版启动器，支持多版本管理、微软账户登录、模组加载器。</p>
-                    <div class="launcher-tags"><span class="badge badge-blue">推荐</span><span class="badge badge-gray">Windows</span><span class="badge badge-gray">macOS</span><span class="badge badge-gray">Linux</span></div>
-                </div>
-                <a href="https://hmcl.huangyuhui.net/download/" target="_blank" rel="noopener" class="btn btn-primary" style="flex-shrink:0">${icons.download} 前往下载</a>
-            </div>
-            <div class="card launcher-card">
-                <div class="launcher-info">
-                    <h3>FCL <span class="text-tertiary" style="font-weight:400">(Fold Craft Launcher)</span></h3>
-                    <p>安卓专属启动器，触屏优化，支持在手机上运行 Minecraft Java 版。</p>
-                    <div class="launcher-tags"><span class="badge badge-gray">Android</span><span class="badge badge-gray">开源</span></div>
-                </div>
-                <a href="https://github.com/FCL-Team/FoldCraftLauncher/releases" target="_blank" rel="noopener" class="btn btn-secondary" style="flex-shrink:0">${icons.download} 前往下载</a>
-            </div>
-            <div class="card launcher-card">
-                <div class="launcher-info">
-                    <h3>PCL <span class="text-tertiary" style="font-weight:400">(Plain Craft Launcher 2)</span></h3>
-                    <p>Windows 平台启动器，界面简洁，操作高效，国内开发者维护。</p>
-                    <div class="launcher-tags"><span class="badge badge-gray">Windows</span><span class="badge badge-gray">免费</span></div>
-                </div>
-                <a href="https://github.com/Meloong-Git/PCL/releases" target="_blank" rel="noopener" class="btn btn-secondary" style="flex-shrink:0">${icons.download} 前往下载</a>
-            </div>
-        </div>
+        <div id="launchers-list" style="display:flex;flex-direction:column;gap:var(--space-4)">${loadingBlock()}</div>
         <div class="disclaimer"><strong>免责声明</strong><br>以上启动器均为第三方开发的 Minecraft 启动工具，与本站无关。上述链接仅跳转到各启动器的官方网站或 GitHub Releases 页面，本站不提供任何启动器文件的直接下载。请从官方渠道下载以确保安全。使用第三方启动器所产生的任何风险由用户自行承担。</div>
 
         <h2 class="dl-section-title" style="margin-top:var(--space-16)">自有模组</h2>
@@ -1133,13 +1111,33 @@ async function renderDownload(app) {
     </div>`;
 
     const box = document.getElementById('mods-list');
-    const { data, error } = await sb.from('mods').select('*').eq('enabled', true).order('sort_order', { ascending: true }).order('created_at', { ascending: false });
-    if (error) { box.innerHTML = '<p class="text-secondary">暂时无法加载模组列表</p>'; return; }
-    box.innerHTML = (data || []).map(m => `
+    const lbox = document.getElementById('launchers-list');
+    const [lr, mr] = await Promise.all([
+        sb.from('launchers').select('*').eq('enabled', true).order('sort_order', { ascending: true }).order('created_at', { ascending: false }),
+        sb.from('mods').select('*').eq('enabled', true).order('sort_order', { ascending: true }).order('created_at', { ascending: false }),
+    ]);
+    if (lbox) {
+        if (lr.error) { lbox.innerHTML = '<p class="text-secondary">暂时无法加载启动器列表</p>'; }
+        else lbox.innerHTML = (lr.data || []).map(l => {
+            const tags = String(l.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+            const tagHtml = tags.map((t, i) => `<span class="badge ${i === 0 ? 'badge-blue' : 'badge-gray'}">${esc(t)}</span>`).join('');
+            return `
+            <div class="card launcher-card">
+                <div class="launcher-info">
+                    <h3>${esc(l.name)}${l.subtitle ? ` <span class="text-tertiary" style="font-weight:400">(${esc(l.subtitle)})</span>` : ''}</h3>
+                    <p>${mdEmphasis(l.description || '暂无说明')}</p>
+                    ${tags.length ? `<div class="launcher-tags">${tagHtml}</div>` : ''}
+                </div>
+                ${l.url ? `<a href="${esc(l.url)}" target="_blank" rel="noopener" class="btn btn-primary" style="flex-shrink:0">${icons.download} 前往下载</a>` : '<span class="badge badge-gray">暂未提供链接</span>'}
+            </div>`;
+        }).join('') || '<div class="card text-secondary" style="text-align:center">管理员还没有添加启动器</div>';
+    }
+    if (mr.error) { box.innerHTML = '<p class="text-secondary">暂时无法加载模组列表</p>'; return; }
+    box.innerHTML = (mr.data || []).map(m => `
         <div class="card launcher-card">
             <div class="launcher-info">
                 <h3>${esc(m.name)} ${m.version ? `<span class="text-tertiary" style="font-weight:400">v${esc(m.version)}</span>` : ''}</h3>
-                <p>${esc(m.description || '暂无说明')}</p>
+                <p>${mdEmphasis(m.description || '暂无说明')}</p>
             </div>
             ${m.url ? `<a href="${esc(m.url)}" target="_blank" rel="noopener" class="btn btn-primary" style="flex-shrink:0">${icons.download} 下载</a>` : '<span class="badge badge-gray">暂未提供下载</span>'}
         </div>`).join('') || '<div class="card text-secondary" style="text-align:center">管理员还没有上传模组</div>';
@@ -1898,6 +1896,7 @@ async function renderAdmin(app, sub) {
         { key: 'applications', label: '注册申请审核', icon: icons.flag },
         { key: 'members', label: '成员管理', icon: icons.users },
         { key: 'mods', label: '模组管理', icon: icons.download },
+        { key: 'launchers', label: '启动器管理', icon: icons.download },
         { key: 'events', label: '活动管理', icon: icons.users },
         { key: 'records', label: '游戏实录', icon: icons.download },
         { key: 'ai', label: 'AI 配置', icon: icons.shield },
@@ -1924,6 +1923,7 @@ async function renderAdmin(app, sub) {
         case 'applications': renderAdminApplications(content); break;
         case 'members': renderAdminTable(content, 'members'); break;
         case 'mods': renderAdminMods(content); break;
+        case 'launchers': renderAdminLaunchers(content); break;
         case 'events': renderAdminEvents(content); break;
         case 'records': renderAdminRecords(content); break;
         case 'ai': renderAdminAi(content); break;
@@ -2394,7 +2394,8 @@ async function renderAdminMods(el) {
                 <div class="form-group"><label class="form-label">版本（可选）</label><input class="input" id="mod-version" placeholder="例如 1.0.0" maxlength="32"></div>
             </div>
             <div class="form-group"><label class="form-label">下载链接</label><input class="input" id="mod-url" placeholder="https://..."></div>
-            <div class="form-group"><label class="form-label">说明（可选）</label><textarea class="textarea" id="mod-desc" rows="2" maxlength="300"></textarea></div>
+            <div class="form-group"><label class="form-label">说明（可选）</label><textarea class="textarea" id="mod-desc" rows="2" maxlength="300"></textarea>
+                <p class="text-tertiary" style="font-size:.75rem;margin-top:.25rem">支持 <code>**词语</code><code>**</code> 语法，渲染为蓝色加粗强调。</p></div>
             <div class="form-group"><label class="form-label">排序（数字越小越靠前）</label><input class="input" id="mod-sort" type="number" value="0"></div>
             <button class="btn btn-primary" onclick="saveMod()">添加模组</button>
         </div>
@@ -2473,6 +2474,112 @@ async function deleteMod(id) {
     if (error) return toast(errText(error, '删除失败'), 'error');
     toast('已删除');
     renderAdminMods(document.getElementById('admin-content'));
+}
+
+// ==================== 后台：启动器管理 ====================
+async function renderAdminLaunchers(el) {
+    const { data } = await sb.from('launchers').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: false });
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">启动器管理（下载页 · 启动器）</h2>
+        <div class="card mb-8">
+            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">新增启动器</h3>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">启动器名称</label><input class="input" id="lc-name" placeholder="例如 HMCL" maxlength="40"></div>
+                <div class="form-group"><label class="form-label">全称（可选）</label><input class="input" id="lc-subtitle" placeholder="例如 Hello Minecraft! Launcher" maxlength="80"></div>
+            </div>
+            <div class="form-group"><label class="form-label">下载链接</label><input class="input" id="lc-url" placeholder="https://..."></div>
+            <div class="form-group">
+                <label class="form-label">说明</label>
+                <textarea class="textarea" id="lc-desc" rows="2" maxlength="300"></textarea>
+                <p class="text-tertiary" style="font-size:.75rem;margin-top:.25rem">支持 <code>**词语</code><code>**</code> 语法（前后各两个星号包裹），渲染为蓝色加粗强调，例如：支持 <code>**微软账户登录**</code>。</p>
+            </div>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">标签（逗号分隔，第一个为蓝色）</label><input class="input" id="lc-tags" placeholder="例如 推荐,Windows,macOS" maxlength="120"></div>
+                <div class="form-group"><label class="form-label">排序（数字越小越靠前）</label><input class="input" id="lc-sort" type="number" value="0"></div>
+            </div>
+            <button class="btn btn-primary" onclick="saveLauncher()">添加启动器</button>
+        </div>
+        <div class="card" style="padding:0;overflow:auto">
+            <table class="data-table">
+                <thead><tr><th>名称</th><th>标签</th><th>链接</th><th>排序</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody>${(data || []).map(l => `
+                    <tr>
+                        <td>${esc(l.name)}${l.description ? `<div class="text-tertiary">${esc(l.description)}</div>` : ''}</td>
+                        <td>${esc(l.tags || '-')}</td>
+                        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.url ? `<a href="${esc(l.url)}" target="_blank" rel="noopener" style="color:var(--color-accent)">${esc(l.url)}</a>` : '<span class="text-tertiary">未填写</span>'}</td>
+                        <td>${l.sort_order}</td>
+                        <td><span class="badge ${l.enabled ? 'badge-green' : 'badge-gray'}">${l.enabled ? '上架' : '下架'}</span></td>
+                        <td>
+                            <button class="btn btn-ghost btn-sm" onclick="toggleLauncher('${l.id}',${l.enabled ? 'false' : 'true'})">${l.enabled ? '下架' : '上架'}</button>
+                            <button class="btn btn-ghost btn-sm" onclick="editLauncher('${l.id}')">编辑</button>
+                            <button class="btn btn-ghost btn-sm" onclick="deleteLauncher('${l.id}')">删除</button>
+                        </td>
+                    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--color-text-tertiary)">还没有启动器</td></tr>'}</tbody>
+            </table>
+        </div>`;
+    draftBind('launcher', ['lc-name', 'lc-subtitle', 'lc-url', 'lc-desc', 'lc-tags', 'lc-sort']);
+}
+async function saveLauncher() {
+    const payload = {
+        name: document.getElementById('lc-name').value.trim(),
+        subtitle: document.getElementById('lc-subtitle').value.trim(),
+        url: document.getElementById('lc-url').value.trim(),
+        description: document.getElementById('lc-desc').value.trim(),
+        tags: document.getElementById('lc-tags').value.trim(),
+        sort_order: parseInt(document.getElementById('lc-sort').value) || 0,
+        enabled: true,
+    };
+    if (!payload.name) return toast('请填写启动器名称', 'error');
+    const { error } = await sb.from('launchers').insert(payload);
+    if (error) return toast(errText(error, '添加失败'), 'error');
+    toast('启动器已添加');
+    draftClear('launcher');
+    renderAdminLaunchers(document.getElementById('admin-content'));
+}
+async function toggleLauncher(id, enabled) {
+    await sb.from('launchers').update({ enabled }).eq('id', id);
+    toast(enabled ? '已上架' : '已下架');
+    renderAdminLaunchers(document.getElementById('admin-content'));
+}
+async function editLauncher(id) {
+    const { data: l } = await sb.from('launchers').select('*').eq('id', id).maybeSingle();
+    if (!l) return;
+    showModal('编辑启动器', `
+        <div class="form-group"><label class="form-label">启动器名称</label><input class="input" id="el-name" value="${esc(l.name)}" maxlength="40"></div>
+        <div class="form-group"><label class="form-label">全称</label><input class="input" id="el-subtitle" value="${esc(l.subtitle || '')}" maxlength="80"></div>
+        <div class="form-group"><label class="form-label">下载链接</label><input class="input" id="el-url" value="${esc(l.url || '')}"></div>
+        <div class="form-group">
+            <label class="form-label">说明</label>
+            <textarea class="textarea" id="el-desc" rows="2" maxlength="300">${esc(l.description || '')}</textarea>
+            <p class="text-tertiary" style="font-size:.75rem;margin-top:.25rem">支持 <code>**词语</code><code>**</code> 语法，渲染为蓝色加粗强调。</p>
+        </div>
+        <div class="form-group"><label class="form-label">标签（逗号分隔，第一个为蓝色）</label><input class="input" id="el-tags" value="${esc(l.tags || '')}" maxlength="120"></div>
+        <div class="form-group"><label class="form-label">排序</label><input class="input" id="el-sort" type="number" value="${l.sort_order}"></div>`,
+        `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+         <button class="btn btn-primary" onclick="updateLauncher('${l.id}')">保存</button>`);
+}
+async function updateLauncher(id) {
+    const payload = {
+        name: document.getElementById('el-name').value.trim(),
+        subtitle: document.getElementById('el-subtitle').value.trim(),
+        url: document.getElementById('el-url').value.trim(),
+        description: document.getElementById('el-desc').value.trim(),
+        tags: document.getElementById('el-tags').value.trim(),
+        sort_order: parseInt(document.getElementById('el-sort').value) || 0,
+    };
+    if (!payload.name) return toast('请填写启动器名称', 'error');
+    const { error } = await sb.from('launchers').update(payload).eq('id', id);
+    if (error) return toast(errText(error, '保存失败'), 'error');
+    document.querySelector('.modal-overlay')?.remove();
+    toast('已保存');
+    renderAdminLaunchers(document.getElementById('admin-content'));
+}
+async function deleteLauncher(id) {
+    if (!confirm('确定删除该启动器？')) return;
+    const { error } = await sb.from('launchers').delete().eq('id', id);
+    if (error) return toast(errText(error, '删除失败'), 'error');
+    toast('已删除');
+    renderAdminLaunchers(document.getElementById('admin-content'));
 }
 
 // ==================== 后台：游戏实录审核 ====================

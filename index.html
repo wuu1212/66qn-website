@@ -209,6 +209,10 @@
         .power-task-card { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: var(--space-4) var(--space-5); }
         .power-task-reward { font-size: 1.125rem; font-weight: 700; color: var(--color-accent); white-space: nowrap; }
 
+        /* ==================== 文本强调（**词语** → 蓝底加粗） ==================== */
+        .md-hl { background: #dbeafe; color: #1e40af; padding: .05em .4em; border-radius: 4px; font-weight: 600; }
+        .disclaimer code { background: rgba(0,0,0,.06); padding: .1em .35em; border-radius: 3px; font-size: .9em; }
+
         /* ==================== 成员页 ==================== */
         .member-card { padding: var(--space-5); }
         .member-top { display: flex; align-items: center; gap: .75rem; }
@@ -539,7 +543,7 @@
 <!-- Supabase SDK + 配置 + 应用逻辑 -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js?v=20261023b"></script>
-<script src="app.js?v=20261023c"></script>
+<script src="app.js?v=20261023d"></script>
 
 </body>
 </html>
