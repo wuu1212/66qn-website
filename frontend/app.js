@@ -133,6 +133,7 @@ const APP = {
                 break;
             default: render404(app);
         }
+        if (AUTH_ROUTES[route]) mountAuthVisual(app);
         window.scrollTo(0, 0);
     },
     updateNavbar() {
@@ -1657,6 +1658,22 @@ async function copyMessage(msgId) {
 }
 
 // ==================== 页面：登录 / 注册 ====================
+// 登录 / 注册 / 申请 / 邮箱验证这四页共用右侧主城实拍图
+const AUTH_ROUTES = { '/login': true, '/register': true, '/apply': true, '/verify': true };
+
+function mountAuthVisual(app) {
+    const page = app.querySelector('.auth-page');
+    if (!page || page.parentElement.classList.contains('auth-split')) return;
+    const split = document.createElement('div');
+    split.className = 'auth-split';
+    app.insertBefore(split, page);
+    split.appendChild(page);
+    const side = document.createElement('aside');
+    side.className = 'auth-visual';
+    side.innerHTML = '<img src="assets/66qn-tower.jpg" alt="66qn 主城玻璃塔楼">';
+    split.appendChild(side);
+}
+
 function renderLogin(app) {
     app.innerHTML = `
     <div class="auth-page page-enter">

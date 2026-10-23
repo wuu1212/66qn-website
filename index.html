@@ -348,6 +348,17 @@
         .auth-link a { color: var(--color-accent); }
         .auth-link a:hover { text-decoration: underline; }
 
+        /* 登录 / 注册 / 申请 / 验证：左侧表单，右侧主城实拍（窄屏隐藏图片） */
+        .auth-split { display: flex; align-items: center; justify-content: center; gap: var(--space-16); max-width: 1040px; margin: 0 auto; padding: 0 var(--space-6); }
+        .auth-split .auth-page { flex: 0 0 400px; max-width: none; margin: var(--space-16) 0; padding: 0; }
+        .auth-visual { flex: 0 1 420px; align-self: stretch; display: flex; }
+        .auth-visual img { width: 100%; min-height: 420px; max-height: 620px; object-fit: cover; object-position: 50% 38%; border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.18); }
+        @media (max-width: 1023px) {
+            .auth-split { display: block; }
+            .auth-split .auth-page { margin: var(--space-16) auto; max-width: 400px; }
+            .auth-visual { display: none; }
+        }
+
         /* ==================== Page: Profile ==================== */
         .profile-header { display: flex; align-items: center; gap: var(--space-6); margin-bottom: var(--space-8); }
         .profile-name { font-size: 1.5rem; font-weight: 600; }
@@ -544,7 +555,7 @@
 <!-- Supabase SDK + 配置 + 应用逻辑 -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js?v=20261023b"></script>
-<script src="app.js?v=20261023e"></script>
+<script src="app.js?v=20261023f"></script>
 
 </body>
 </html>
