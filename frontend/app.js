@@ -1682,11 +1682,40 @@ function mountAuthVisual(app) {
     split.appendChild(side);
 }
 
+let LOGIN_MODE = 'pwd';        // pwd=密码登录 | otp=邮箱验证码登录
+let OTP_LOGIN_ON = false;      // 由后台开关 site.otp_login_enabled 决定，默认关
+
 function renderLogin(app) {
     app.innerHTML = `
     <div class="auth-page page-enter">
         <h1 class="auth-title">登录</h1>
         <p class="auth-subtitle">欢迎回到 66qn 服务器</p>
+        <div id="login-form">${loginFormHtml(LOGIN_MODE)}</div>
+        <p class="auth-link">还没有账号？<a href="#/register">邮箱注册</a> · <a href="#/apply">申请账号</a>（无需邮箱）</p>
+        <p class="auth-link">已注册但没收到验证码？<a href="#/verify">去验证邮箱</a></p>
+        <p class="auth-link">忘记密码？<a href="#/reset">看重置方式</a></p>
+    </div>`;
+    renderLoginExtra();
+}
+
+function loginFormHtml(mode) {
+    const toggle = OTP_LOGIN_ON
+        ? `<p class="auth-link"><a href="#/login" onclick="switchLoginMode('${mode === 'otp' ? 'pwd' : 'otp'}');return false">${mode === 'otp' ? '改用密码登录' : '用邮箱验证码登录（不用密码）'}</a></p>`
+        : '';
+    if (mode === 'otp') {
+        return `
+        <div class="form-group"><label class="form-label">注册邮箱</label>
+            <input class="input" id="otp-email" type="email" placeholder="注册时填的邮箱" autocomplete="email"></div>
+        <button class="btn btn-primary btn-lg" style="width:100%" id="otp-send" onclick="sendLoginOtp()">发送验证码</button>
+        <div id="otp-step2" style="display:none">
+            <div class="form-group" style="margin-top:var(--space-6)"><label class="form-label">邮件里的 6 位验证码</label>
+                <input class="input" id="otp-code" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code"></div>
+            <button class="btn btn-primary btn-lg" style="width:100%" onclick="verifyLoginOtp()">验证并登录</button>
+        </div>
+        <p class="text-tertiary" style="font-size:.75rem;margin-top:var(--space-4);line-height:1.7">验证码只发给<strong>已注册</strong>的邮箱，不会凭它新建账号。收不到就去垃圾邮件箱看看，或直接改用密码登录。</p>
+        ${toggle}`;
+    }
+    return `
         <button class="github-btn" onclick="githubLogin()">${icons.github} 使用 GitHub 登录</button>
         <div class="auth-divider">或</div>
         <div class="form-group"><label class="form-label">邮箱或用户名</label>
@@ -1694,10 +1723,53 @@ function renderLogin(app) {
         <div class="form-group"><label class="form-label">密码</label>
             <input class="input" id="login-password" type="password" placeholder="输入密码"></div>
         <button class="btn btn-primary btn-lg" style="width:100%" onclick="doLogin()">登录</button>
-        <p class="auth-link">还没有账号？<a href="#/register">邮箱注册</a> · <a href="#/apply">申请账号</a>（无需邮箱）</p>
-        <p class="auth-link">已注册但没收到验证码？<a href="#/verify">去验证邮箱</a></p>
-        <p class="auth-link">忘记密码？<a href="#/reset">看重置方式</a></p>
-    </div>`;
+        ${toggle}`;
+}
+
+// 异步读后台开关，再决定要不要露出验证码入口
+async function renderLoginExtra() {
+    const info = await Settings.load();
+    OTP_LOGIN_ON = !!(info.site && info.site.otp_login_enabled === true);
+    const box = document.getElementById('login-form');
+    if (box) box.innerHTML = loginFormHtml(LOGIN_MODE);
+}
+
+function switchLoginMode(mode) {
+    LOGIN_MODE = mode;
+    const box = document.getElementById('login-form');
+    if (box) box.innerHTML = loginFormHtml(mode);
+}
+
+async function sendLoginOtp() {
+    const email = document.getElementById('otp-email').value.trim();
+    if (!email.includes('@')) return toast('请输入邮箱地址', 'error');
+    const btn = document.getElementById('otp-send');
+    btn.disabled = true;
+    btn.textContent = '发送中…';
+    // shouldCreateUser:false —— 只给已注册邮箱发码，堵住"凭邮箱白嫖建号"
+    const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
+    btn.disabled = false;
+    btn.textContent = '重新发送验证码';
+    if (error) {
+        if (/rate limit|too many|over/i.test(error.message || '')) return toast('发送太频繁，等一分钟再试', 'error');
+        return toast(errText(error, '发送失败，请改用密码登录或联系管理员'), 'error');
+    }
+    document.getElementById('otp-step2').style.display = 'block';
+    document.getElementById('otp-code').focus();
+    toast('验证码已发送，请查收邮箱（含垃圾邮件箱）');
+}
+
+async function verifyLoginOtp() {
+    const email = document.getElementById('otp-email').value.trim();
+    const token = document.getElementById('otp-code').value.trim();
+    if (!/^\d{6}$/.test(token)) return toast('请输入 6 位数字验证码', 'error');
+    const { error } = await sb.auth.verifyOtp({ email, token, type: 'email' });
+    if (error) {
+        if (/expired|invalid/i.test(error.message || '')) return toast('验证码不正确或已过期，重新发一个', 'error');
+        return toast(errText(error, '验证失败，请重试'), 'error');
+    }
+    toast('登录成功');
+    location.hash = '#/';
 }
 
 async function doLogin() {
@@ -2563,13 +2635,15 @@ async function renderAdminAnnouncement(el) {
       <div style="border-top:1px solid var(--color-border);margin-top:var(--space-6);padding-top:var(--space-5)">
         <label class="flex-center gap-4"><input id="ann-emailreset" type="checkbox" ${s.email_reset_enabled === true ? 'checked' : ''}> 开放「忘记密码」邮件自助重置</label>
         <p class="text-tertiary" style="font-size:.75rem;margin-top:.4rem;line-height:1.7">只有确认阿里云 SMTP 已经能正常收信之后再打开。没打开时，登录页的「忘记密码」走管理员后台重置。</p>
+        <label class="flex-center gap-4" style="margin-top:var(--space-4)"><input id="ann-otplogin" type="checkbox" ${s.otp_login_enabled === true ? 'checked' : ''}> 开放「邮箱验证码」免密登录</label>
+        <p class="text-tertiary" style="font-size:.75rem;margin-top:.4rem;line-height:1.7">打开后登录页多一个「用邮箱验证码登录」入口。前提同样是邮件能收到，并且 Supabase 的 Auth → Email Templates → <strong>Magic Link</strong> 模板里要有 <code>{{ .Token }}</code>，否则邮件只有链接没有码。</p>
       </div>
       <button class="btn btn-primary" style="margin-top:1rem" onclick="saveAnnouncement()">保存公告</button></div>`;
     draftBind('announcement', ['ann-text', 'ann-url', 'ann-enabled']);
 }
 async function saveAnnouncement() {
     const { data } = await sb.from('server_settings').select('value').eq('key','site').maybeSingle();
-    const value = {...(data?.value || {}), announcement: document.getElementById('ann-text').value.trim(), announcement_url: document.getElementById('ann-url').value.trim(), announcement_enabled: document.getElementById('ann-enabled').checked, email_reset_enabled: document.getElementById('ann-emailreset').checked};
+    const value = {...(data?.value || {}), announcement: document.getElementById('ann-text').value.trim(), announcement_url: document.getElementById('ann-url').value.trim(), announcement_enabled: document.getElementById('ann-enabled').checked, email_reset_enabled: document.getElementById('ann-emailreset').checked, otp_login_enabled: document.getElementById('ann-otplogin').checked};
     const { error } = await sb.from('server_settings').upsert({key:'site', value, updated_at:new Date().toISOString()});
     if (error) return toast(errText(error, '公告保存失败'), 'error'); Settings.cache = null; refreshAnnouncement(); draftClear('announcement'); toast('公告已保存');
 }
