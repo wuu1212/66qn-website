@@ -1691,8 +1691,6 @@ function renderLogin(app) {
         <h1 class="auth-title">登录</h1>
         <p class="auth-subtitle">欢迎回到 66qn 服务器</p>
         <div id="login-form">${loginFormHtml(LOGIN_MODE)}</div>
-        <p class="auth-link">还没有账号？<a href="#/register">邮箱注册</a> · <a href="#/apply">申请账号</a>（无需邮箱）</p>
-        <p class="auth-link">已注册但没收到验证码？<a href="#/verify">去验证邮箱</a></p>
         <p class="auth-link">忘记密码？<a href="#/reset">看重置方式</a></p>
     </div>`;
     renderLoginExtra();
