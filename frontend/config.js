@@ -6,6 +6,6 @@
 //                    anon 密钥是设计上允许公开的，配合 RLS 使用是安全的
 // ============================================================
 window.APP_CONFIG = {
-  SUPABASE_URL: 'https://iywntwllhjbubmhtacdp.supabase.co',
+  SUPABASE_URL: 'https://api.66qnmc.top',
   SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml5d250d2xsaGpidWJtaHRhY2RwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2MzA5NjQsImV4cCI6MjEwNzIwNjk2NH0.JZqv3wA6RM3Tzz9Hli3TJZb1lxmmEqlBQMGJAdk1rQQ',
 };
