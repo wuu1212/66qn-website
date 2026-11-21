@@ -11,6 +11,18 @@
 //       当前为 bright-service）→ 粘贴本文件 → Deploy
 //       并在 Edge Function 的 Secrets 中设置 AI_SECRET，
 //       其值必须与数据库 public.app_secrets 表中 key='ai_secret' 的值完全一致
+//
+// 2026-11-21 新增 action=qq_bind：给玩家的 QQ号@qq.com 发 6 位绑定验证码。
+//   发信复用已有的阿里云 DirectMail 账号（和 Supabase Auth 用的是同一个发件地址，
+//   但不经过 GoTrue，所以不会影响登录/找回密码那两条邮件链路）。
+//   需要为本函数额外配 4 个 Secrets（在控制台 Functions → bright-service → Secrets 里加，
+//   不要把口令贴进聊天或提交进仓库）：
+//     SMTP_HOST = smtpdm.aliyun.com
+//     SMTP_PORT = 465
+//     SMTP_USER = noreply@mail.66qnmc.top      （必须和 DirectMail 里已验证的发件地址完全一致，否则 553）
+//     SMTP_PASS = 该发件地址的 SMTP 密码
+//   没配这四个时，qq_bind 会直接返回「邮件通道未就绪」，其它动作照常工作；
+//   前端也只在后台「顶部横幅与开关 → 开放 QQ 邮箱绑定」勾上后才露出这个入口。
 // ============================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -132,6 +144,96 @@ function parseVerdict(raw: string): { verdict: 'pass' | 'reject' | 'keep'; reaso
   if (/reject|delete|打回|违规|删除/.test(low)) return { verdict: 'reject', reason: raw.slice(0, 100) };
   if (/keep|保留/.test(low)) return { verdict: 'keep', reason: raw.slice(0, 100) };
   return { verdict: 'pass', reason: raw.slice(0, 100) };
+}
+
+// ============================================================
+// 发信：自带一个极简 SMTP 客户端（AUTH LOGIN + 隐式 TLS）
+//   不 import 任何第三方邮件库，免得云端 esm.sh 拉包失败导致整个函数部署不上去。
+//   只支持 465 端口（smtpdm.aliyun.com 的 SSL 端口）；587 的 STARTTLS 这里没实现。
+// ============================================================
+function b64utf8(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+async function smtpSend(to: string, subject: string, html: string): Promise<void> {
+  const host = Deno.env.get('SMTP_HOST') || 'smtpdm.aliyun.com';
+  const port = parseInt(Deno.env.get('SMTP_PORT') || '465', 10);
+  const user = Deno.env.get('SMTP_USER') || '';
+  const pass = Deno.env.get('SMTP_PASS') || '';
+  const from = Deno.env.get('SMTP_FROM') || user;
+  if (!user || !pass) throw new Error('SMTP_USER / SMTP_PASS 未配置');
+
+  const conn = await Deno.connectTls({ host, port, serverName: host });
+  const dec = new TextDecoder();
+  let buf = '';
+
+  const readline = async (): Promise<string> => {
+    for (;;) {
+      const i = buf.indexOf('\r\n');
+      if (i >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 2); return line; }
+      const chunk = new Uint8Array(4096);
+      const n = await conn.read(chunk);
+      if (n === null) throw new Error('SMTP 连接被服务端关闭' + (buf ? '：' + buf : ''));
+      buf += dec.decode(chunk.subarray(0, n), { stream: true });
+    }
+  };
+  const expect = async (...codes: number[]): Promise<string> => {
+    let line = await readline();
+    while (/^\d{3}-/.test(line)) line = await readline();   // 多行响应取最后一行
+    const code = parseInt(line.slice(0, 3), 10);
+    if (!codes.includes(code)) throw new Error(`SMTP 期望 ${codes.join('/')}，实际 ${line}`);
+    return line;
+  };
+  const send = async (s: string): Promise<void> => {
+    await conn.write(new TextEncoder().encode(s + '\r\n'));
+  };
+  const cmd = async (s: string, ...codes: number[]): Promise<string> => {
+    await send(s);
+    return expect(...codes);
+  };
+
+  try {
+    await expect(220);
+    await cmd(`EHLO ${Deno.hostname ? Deno.hostname() : 'supabase-edge'}`, 250);
+    await cmd('AUTH LOGIN', 334);
+    await cmd(b64utf8(user), 334);
+    await cmd(b64utf8(pass), 235);
+    await cmd(`MAIL FROM:<${from}>`, 250);
+    await cmd(`RCPT TO:<${to}>`, 250, 251);
+    await cmd('DATA', 350);
+    // 正文用 base64 传输，不会有以点开头的行，也不受行长度限制影响
+    const mail = [
+      `From: =?UTF-8?B?${b64utf8('66QN 服务器')}?= <${from}>`,
+      `To: <${to}>`,
+      `Subject: =?UTF-8?B?${b64utf8(subject)}?=`,
+      'Date: ' + new Date().toUTCString(),
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      b64utf8(html),
+      '',
+      '.',
+    ].join('\r\n');
+    await send(mail);
+    await expect(250);
+    await cmd('QUIT', 221);
+  } finally {
+    try { conn.close(); } catch { /* 已经断了就不用再管 */ }
+  }
+}
+
+function bindMailHtml(code: string, nickname: string, minutes: number): string {
+  return `<div style="font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#1a1a1a">
+  <div style="font-size:15px;font-weight:600;margin-bottom:16px">66QN 账号绑定验证码</div>
+  <p style="font-size:14px;line-height:1.8;margin:0 0 16px">${nickname}，你好：</p>
+  <p style="font-size:14px;line-height:1.8;margin:0 0 20px">你在 66qnmc.top 上申请把 QQ 号绑定到网站账号。下面是本次验证码，<strong>${minutes} 分钟内有效</strong>，只使用一次。</p>
+  <div style="font-size:34px;font-weight:700;letter-spacing:10px;text-align:center;padding:18px;background:#f2f6ff;border-radius:8px;color:#2563eb">${code}</div>
+  <p style="font-size:13px;line-height:1.8;color:#666;margin:20px 0 0">如果你没有做过这个操作，说明有人填错了 QQ 号，忽略这封邮件即可，你的账号不会有任何变化。</p>
+</div>`;
 }
 
 Deno.serve(async (req: Request) => {
@@ -316,6 +418,53 @@ Deno.serve(async (req: Request) => {
       const r = await admin.auth.admin.updateUserById(userId, { password: newPass });
       if (r.error) return json({ error: '修改密码失败：' + r.error.message }, 500);
       return json({ ok: true });
+    }
+
+    // ---------------- 玩家：绑定 QQ 号（发 6 位验证码到 QQ号@qq.com）----------------
+    if (action === 'qq_bind') {
+      // 这里只要「已登录」，不要管理员：玩家给自己绑 QQ。用和 requireAdmin 相同的取 token 方式，
+      // 但不查 role。
+      const hdr = req.headers.get('Authorization') || '';
+      const token = hdr.replace(/^Bearer\s+/i, '').trim();
+      if (!token) return json({ error: '未登录', need_login: true }, 401);
+      const me = await admin.auth.getUser(token);
+      if (me.error || !me.data || !me.data.user) return json({ error: '登录状态无效', need_login: true }, 401);
+      const uid = me.data.user.id;
+
+      const qq = String(body.qq || '').trim();
+      if (!/^[1-9][0-9]{4,10}$/.test(qq)) return json({ ok: false, error: 'QQ 号格式不对：应为 5-11 位数字，且不能以 0 开头' });
+
+      // 后台开关没打开就不发信（这个入口默认关闭，避免 SMTP 没配好时给玩家一个死按钮）
+      const { data: siteRow } = await admin.from('server_settings').select('value').eq('key', 'site').maybeSingle();
+      const siteVal = (siteRow && siteRow.value) || {};
+      if (siteVal.qq_bind_enabled !== true) return json({ ok: false, error: 'QQ 绑定功能尚未开放' }, 403);
+
+      // 验证码在数据库里生成并落库（这个函数只允许 service_role 调用），避免任何人拿 anon key 直接发信
+      const { data: made, error: madeErr } = await admin.rpc('qq_create_bind_code', { p_user: uid, p_qq: qq });
+      if (madeErr) return json({ ok: false, error: '生成验证码失败：' + madeErr.message }, 500);
+      if (!made || !(made as Record<string, unknown>).ok) {
+        return json({ ok: false, error: String((made as Record<string, unknown>)?.error || '生成验证码失败') });
+      }
+      const code = String((made as Record<string, unknown>).code);
+      const mailTo = String((made as Record<string, unknown>).mail_to);
+      const nickname = String((made as Record<string, unknown>).nickname || '玩家');
+
+      try {
+        await smtpSend(mailTo, '66QN 账号绑定验证码', bindMailHtml(code, nickname, 15));
+      } catch (e) {
+        // 发信失败就把这张码作废，免得库里留一堆没人收得到的验证码
+        await admin.from('qq_bind_codes').update({ status: 'cancelled' })
+          .eq('user_id', uid).eq('code', code).eq('status', 'pending');
+        const msg = String((e as Error)?.message || e);
+        const notConfigured = /SMTP_USER|SMTP_PASS|未配置/.test(msg);
+        return json({
+          ok: false,
+          error: notConfigured
+            ? '邮件通道未就绪：请先在本函数的 Secrets 里配置 SMTP_USER / SMTP_PASS'
+            : '邮件发送失败：' + msg,
+        }, 502);
+      }
+      return json({ ok: true, mail_to: mailTo.replace(/^(\d{1,3})\d+(@.*)$/, '$1***$2') });
     }
 
     return json({ error: 'unknown action' }, 400);

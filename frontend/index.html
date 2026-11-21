@@ -209,6 +209,10 @@
         .power-task-card { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: var(--space-4) var(--space-5); }
         .power-task-reward { font-size: 1.125rem; font-weight: 700; color: var(--color-accent); white-space: nowrap; }
 
+        /* ==================== 文本强调（**词语** → 蓝底加粗） ==================== */
+        .md-hl { background: #dbeafe; color: #1e40af; padding: .05em .4em; border-radius: 4px; font-weight: 600; }
+        .disclaimer code { background: rgba(0,0,0,.06); padding: .1em .35em; border-radius: 3px; font-size: .9em; }
+
         /* ==================== 成员页 ==================== */
         .member-card { padding: var(--space-5); }
         .member-top { display: flex; align-items: center; gap: .75rem; }
@@ -302,31 +306,9 @@
         .comment-actions button { color: var(--color-text-tertiary); transition: color 0.15s; }
         .comment-actions button:hover { color: var(--color-text); }
 
-        /* ==================== Page: Messages ==================== */
-        .messages-layout { display: grid; grid-template-columns: 280px 1fr; min-height: 500px; border: 1px solid var(--color-border); border-radius: 4px; overflow: hidden; }
-        .messages-sidebar { border-right: 1px solid var(--color-border); }
-        .conversation-item {
-            display: flex; align-items: center; gap: var(--space-3);
-            padding: var(--space-4); border-bottom: 1px solid var(--color-border-light);
-            cursor: pointer; transition: background 0.1s;
-        }
-        .conversation-item:hover, .conversation-item.active { background: var(--color-bg-secondary); }
-        .conversation-name { font-size: 0.875rem; font-weight: 500; }
-        .conversation-preview { font-size: 0.8125rem; color: var(--color-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
-        .conversation-badge { margin-left: auto; }
-
-        .chat-area { display: flex; flex-direction: column; }
-        .chat-header { padding: var(--space-4); border-bottom: 1px solid var(--color-border); font-size: 0.9375rem; font-weight: 500; }
-        .chat-messages { flex: 1; padding: var(--space-4); overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-4); }
-        .chat-bubble { max-width: 70%; padding: var(--space-3) var(--space-4); border-radius: 4px; font-size: 0.875rem; line-height: 1.5; position: relative; }
-        .chat-bubble-mine { align-self: flex-end; background: var(--color-accent); color: #fff; }
-        .chat-bubble-other { align-self: flex-start; background: var(--color-bg-tertiary); }
-        .chat-bubble-time { font-size: 0.6875rem; opacity: 0.6; margin-top: var(--space-1); }
-        .chat-bubble-actions { position: absolute; top: -8px; right: 0; display: none; gap: var(--space-1); }
-        .chat-bubble:hover .chat-bubble-actions { display: flex; }
-        .chat-bubble-recalled { align-self: flex-end; color: var(--color-text-tertiary); font-size: 0.8125rem; font-style: italic; }
-        .chat-input-area { display: flex; gap: var(--space-3); padding: var(--space-4); border-top: 1px solid var(--color-border); }
-        .chat-input-area .input { flex: 1; }
+        /* ==================== Page: Messages ====================
+           私信功能已于 2026-11-21 下线，对应样式一并删除。
+           数据库 messages 表的历史记录仍然保留，只在管理后台留档，不再有任何前台界面。 */
 
         /* ==================== Page: Auth ==================== */
         .auth-page { max-width: 400px; margin: var(--space-16) auto; padding: 0 var(--space-6); }
@@ -343,6 +325,28 @@
         .auth-link { text-align: center; margin-top: var(--space-6); font-size: 0.875rem; color: var(--color-text-secondary); }
         .auth-link a { color: var(--color-accent); }
         .auth-link a:hover { text-decoration: underline; }
+
+        /* 登录 / 注册 / 申请 / 验证：左侧表单，右侧主城实拍（窄屏隐藏图片） */
+        .auth-split { display: flex; align-items: center; justify-content: center; gap: var(--space-16); max-width: 1040px; margin: 0 auto; padding: 0 var(--space-6); }
+        .auth-split .auth-page { flex: 0 0 400px; max-width: none; margin: var(--space-16) 0; padding: 0; }
+        .auth-visual { flex: 0 1 420px; align-self: stretch; display: flex; }
+        .auth-visual img { width: 100%; min-height: 420px; max-height: 620px; object-fit: cover; object-position: 50% 38%; border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.18); }
+        @media (max-width: 1023px) {
+            .auth-split { display: block; }
+            .auth-split .auth-page { margin: var(--space-16) auto; max-width: 400px; }
+            .auth-visual { display: none; }
+        }
+
+        /* ==================== 个人中心 ==================== */
+        .pc-card-title { font-size: 1rem; font-weight: 600; margin-bottom: var(--space-5); }
+        .pc-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) 0; border-top: 1px solid var(--color-border); }
+        .pc-row:first-of-type { border-top: none; padding-top: 0; }
+        .pc-row-label { font-size: .8125rem; color: var(--color-text-tertiary); }
+        .pc-row-value { font-size: .9375rem; margin-top: .15rem; word-break: break-all; }
+        .grant-table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+        .grant-table th { text-align: left; font-weight: 500; color: var(--color-text-tertiary); font-size: .75rem; padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-border); }
+        .grant-table td { padding: var(--space-4) var(--space-4) var(--space-4) 0; border-bottom: 1px solid var(--color-border); vertical-align: middle; }
+        .grant-table tr:last-child td { border-bottom: none; }
 
         /* ==================== Page: Profile ==================== */
         .profile-header { display: flex; align-items: center; gap: var(--space-6); margin-bottom: var(--space-8); }
@@ -434,9 +438,9 @@
         .hero-subtitle { animation: riseIn .7s .1s both; }
         .hero-actions { animation: riseIn .7s .18s both; }
         .hero-title::after { content: ''; display: block; width: 34px; height: 3px; margin: 15px auto 0; border-radius: 99px; background: var(--color-accent); animation: floatMark 2.6s ease-in-out infinite; }
-        .link-card, .post-item, .conversation-item, .nav-link, .admin-nav-link { transition: color .2s ease, background .2s ease, border-color .2s ease, transform .2s ease; }
+        .link-card, .post-item, .nav-link, .admin-nav-link { transition: color .2s ease, background .2s ease, border-color .2s ease, transform .2s ease; }
         .link-card:hover { transform: translateY(-4px); box-shadow: 0 8px 20px rgba(37,99,235,.1); }
-        .post-item:hover, .conversation-item:hover { transform: translateX(4px); }
+        .post-item:hover { transform: translateX(4px); }
         .input, .textarea, .select { transition: border-color .2s ease, box-shadow .2s ease, background .2s ease; }
         .input:focus, .textarea:focus, .select:focus { box-shadow: 0 0 0 4px rgba(37,99,235,.1); }
         .page-enter { animation: riseIn .32s ease both; }
@@ -456,8 +460,6 @@
             .hamburger { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; }
             .mobile-nav { position: fixed; top: 56px; left: 0; right: 0; background: var(--color-bg); border-bottom: 1px solid var(--color-border); padding: var(--space-4); z-index: 99; }
             .mobile-nav .nav-link { display: block; padding: var(--space-3) var(--space-4); }
-            .messages-layout { grid-template-columns: 1fr; }
-            .messages-sidebar { display: none; }
             .admin-layout { grid-template-columns: 1fr; }
             .admin-sidebar { display: none; }
             .stat-cards { grid-template-columns: repeat(2, 1fr); }
@@ -478,11 +480,11 @@
             <a href="#/download" class="nav-link" data-route="/download">下载</a>
             <a href="#/members" class="nav-link" data-route="/members">成员</a>
             <a href="#/power" class="nav-link" data-route="/power">电力</a>
+            <a href="#/skill" class="nav-link" data-route="/skill">AI 技能</a>
             <a href="#/commands" class="nav-link" data-route="/commands">指令</a>
             <a href="#/events" class="nav-link" data-route="/events">活动</a>
             <a href="#/records" class="nav-link" data-route="/records">实录</a>
-            <a href="#/forum" class="nav-link" data-route="/forum">社区</a>
-            <a href="#/messages" class="nav-link" data-route="/messages">私信</a>
+            <a href="#/announce" class="nav-link" data-route="/announce">公告</a>
         </div>
         <div class="navbar-user" id="navbar-user">
             <!-- Dynamic: login/register or user avatar -->
@@ -512,6 +514,7 @@
                 <a href="https://space.bilibili.com/3546783978359356" target="_blank" rel="noopener">B站</a>
                 <a href="https://gaox.s.gy/66qn" target="_blank" rel="noopener">地标总览</a>
                 <a href="#/agreement">服务协议</a>
+                <a href="#/bind">账号绑定</a>
                 <a href="#/download">下载页</a>
             </div>
         </div>
@@ -539,7 +542,7 @@
 <!-- Supabase SDK + 配置 + 应用逻辑 -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js?v=20261121a"></script>
-<script src="app.js?v=20261023c"></script>
+<script src="app.js?v=20261121b"></script>
 
 </body>
 </html>

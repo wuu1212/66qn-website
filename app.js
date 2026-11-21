@@ -100,6 +100,7 @@ const APP = {
         app.className = 'page-enter';
         document.getElementById('mobile-nav').style.display = 'none';
         stopStatusAutoRefresh();   // 离开首页后停止轮询，避免后台空跑流量
+        stopBindTimers();          // 离开绑定页要停掉校验码倒计时和轮询，否则定时器会一直空跑
 
         if (!CONFIGURED && route !== '/login' && route !== '/register') {
             app.innerHTML = `<div class="container" style="padding:var(--space-16) var(--space-6);text-align:center">
@@ -119,15 +120,17 @@ const APP = {
             case '/events': renderEvents(app, params[0]); break;
             case '/records': renderRecords(app); break;
             case '/agreement': renderAgreementPage(app); break;
+            case '/announce':
+                if (params[0] === 'new') { location.hash = '#/admin/announce'; return; }
+                else if (params[0]) renderAnnouncementDetail(app, params[0]);
+                else renderAnnouncements(app);
+                break;
+            case '/bind': renderBind(app); break;
+            // 老链接兜底：社区改名公告、私信下线，都跳到新位置，群里/B站简介里发过的地址不会变 404
             case '/forum':
-                if (params[0] === 'new') renderForumNew(app);
-                else if (params[0]) renderForumDetail(app, params[0]);
-                else renderForum(app);
-                break;
+                location.hash = params[0] && params[0] !== 'new' ? '#/announce/' + params[0] : '#/announce'; return;
             case '/messages':
-                if (params[0]) renderMessageDetail(app, params[0]);
-                else renderMessages(app);
-                break;
+                location.hash = '#/announce'; return;
             case '/login': renderLogin(app); break;
             case '/register': renderRegister(app); break;
             case '/apply': renderApply(app); break;
@@ -234,9 +237,9 @@ function toggleMobileNav() {
         <a href="#/commands" class="nav-link" onclick="toggleMobileNav()">指令</a>
         <a href="#/events" class="nav-link" onclick="toggleMobileNav()">活动</a>
         <a href="#/records" class="nav-link" onclick="toggleMobileNav()">实录</a>
-        <a href="#/forum" class="nav-link" onclick="toggleMobileNav()">社区</a>
-        <a href="#/messages" class="nav-link" onclick="toggleMobileNav()">私信</a>
+        <a href="#/announce" class="nav-link" onclick="toggleMobileNav()">公告</a>
         <a href="#/agreement" class="nav-link" onclick="toggleMobileNav()">服务协议</a>
+        ${APP.user ? `<a href="#/bind" class="nav-link" onclick="toggleMobileNav()">账号绑定</a>` : ''}
         ${APP.user ? `<a href="#/profile" class="nav-link" onclick="toggleMobileNav()">个人</a>` : ''}
         ${APP.isAdmin ? '<a href="#/admin" class="nav-link" onclick="toggleMobileNav()">管理后台</a>' : ''}`;
 }
@@ -468,12 +471,8 @@ const icons = {
     settings: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
 };
 
-const CATEGORIES = [
-    { key: '', label: '全部' }, { key: 'announcement', label: '公告' },
-    { key: 'guide', label: '攻略' }, { key: 'build', label: '建筑' },
-    { key: 'discussion', label: '讨论' }, { key: 'general', label: '综合' },
-];
-const CAT_LABEL = Object.fromEntries(CATEGORIES.map(c => [c.key, c.label]));
+// 公告分类与中文名（CATEGORIES / CAT_LABEL）挪到了下面「公告」那一节统一维护，
+// 社区时代那六条分类已经不适用了（攻略/建筑/讨论 三个分类前台不再作为筛选页出现）。
 
 // 服务器设置缓存（登录后首页和后台都会刷新）
 const Settings = {
@@ -751,7 +750,6 @@ async function renderMembers(app) {
                     <div class="text-tertiary" style="font-size:.75rem;margin-top:.5rem">游戏 ID：${esc(name)}</div>
                     <div style="display:flex;gap:.5rem;margin-top:.75rem">
                         <a href="#/profile/${m.id}" class="btn btn-secondary btn-sm">查看主页</a>
-                        ${APP.user && APP.user.id !== m.id ? `<a href="#/messages/${m.id}" class="btn btn-ghost btn-sm">发私信</a>` : ''}
                     </div>
                 </div>`;
             }).join('')}
@@ -861,9 +859,10 @@ async function renderPower(app) {
             <div class="card power-task-card"><div><div class="form-label">每日登录</div><p class="text-secondary" style="font-size:.8125rem">每天首次签到</p></div><span class="power-task-reward">+100</span></div>
             <div class="card power-task-card"><div><div class="form-label">新用户注册</div><p class="text-secondary" style="font-size:.8125rem">完成注册（一次性）</p></div><span class="power-task-reward">+5000</span></div>
             <div class="card power-task-card"><div><div class="form-label">上传游戏实录</div><p class="text-secondary" style="font-size:.8125rem">上传截图并通过审核，每次通过</p></div><span class="power-task-reward">+500</span></div>
-            <div class="card power-task-card"><div><div class="form-label">发布社区帖子</div><p class="text-secondary" style="font-size:.8125rem">在论坛发帖，每日首次</p></div><span class="power-task-reward">+600</span></div>
-            <div class="card power-task-card"><div><div class="form-label">发送社区私信</div><p class="text-secondary" style="font-size:.8125rem">给任意玩家发消息，每日首次</p></div><span class="power-task-reward">+100</span></div>
+            <div class="card power-task-card"><div><div class="form-label">绑定游戏账号 QNID</div><p class="text-secondary" style="font-size:.8125rem">官网绑定后进服不受时长限制</p></div><a href="#/bind" class="power-task-reward" style="color:var(--color-accent)">必做 ›</a></div>
+            <div class="card power-task-card"><div><div class="form-label">AI 技能首次安装</div><p class="text-secondary" style="font-size:.8125rem">领取授权码并让 AI 完成首次连接</p></div><span class="power-task-reward">+60000</span></div>
         </div>
+        <p class="text-tertiary" style="font-size:.75rem;margin:-.5rem 0 1.5rem">社区改版为公告后，「发帖」和「私信」两项任务已随功能一起下线，历史电力记录仍可在下方明细里查到。</p>
 
         <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">我的邀请码</h3>
         <div class="card mb-8">
@@ -1266,8 +1265,38 @@ async function renderDownload(app) {
         </div>`).join('') || '<div class="card text-secondary" style="text-align:center">管理员还没有上传模组</div>';
 }
 
-// ==================== 页面：论坛列表 ====================
-async function renderForum(app) {
+// ==================== 公告（原「社区」，改为官方单向广播）====================
+// 与社区时代的差别：
+//   1) 只有管理员能发布（入口在「管理后台 → 公告发布」，免审核，发出去就是 published）；
+//   2) 玩家端只能读：没有发帖按钮、没有评论、没有点赞、没有举报；
+//   3) 每次打开详情上报一次阅读（同一读者 30 分钟内不重复计），后台能看每日阅读量。
+// 路由同时保留老地址 #/forum，避免群里/B站简介里发过的链接失效。
+
+// 前台可选分类。历史帖子里 community 时代留下的 build/discussion 不在这里，
+// 但 CAT_LABEL 里保留它们的中文名，否则老帖子会显示成英文 key。
+const CATEGORIES = [
+    { key: '', label: '全部' }, { key: 'announcement', label: '公告' },
+    { key: 'guide', label: '教程' }, { key: 'changelog', label: '更新' },
+    { key: 'general', label: '综合' },
+];
+const CAT_LABEL = Object.assign(
+    { build: '建筑', discussion: '讨论' },                       // 社区时代遗留分类，仅用于显示
+    Object.fromEntries(CATEGORIES.filter(c => c.key).map(c => [c.key, c.label]))
+);
+
+// 匿名读者的去重指纹：同一台设备对同一条公告 30 分钟内只算一次阅读量（数据库里再判一次）
+function announcementVisitorId() {
+    try {
+        let v = localStorage.getItem('66qn_vp');
+        if (!v) {
+            v = Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+            localStorage.setItem('66qn_vp', v);
+        }
+        return v;
+    } catch { return 'inc' + Date.now(); }
+}
+
+async function renderAnnouncements(app) {
     app.innerHTML = `<div class="container" style="max-width:720px;margin:0 auto;padding:var(--space-8) var(--space-6)">
         <div class="card" style="padding:0">${loadingBlock()}</div></div>`;
     const { data: posts } = await sb.from('posts')
@@ -1283,26 +1312,26 @@ async function renderForum(app) {
             <div class="forum-tabs">
                 ${CATEGORIES.map(c => `<button class="forum-tab${c.key === '' ? ' active' : ''}" data-cat="${c.key}">${c.label}</button>`).join('')}
             </div>
-            <a href="#/forum/new" class="btn btn-primary btn-sm">${icons.edit} 发帖</a>
+            ${APP.isAdmin ? `<a href="#/admin/announce" class="btn btn-primary btn-sm">${icons.edit} 发布公告</a>` : ''}
         </div>
         <div class="card" style="padding:0;overflow:hidden">
-            ${!posts || posts.length === 0 ? '<div style="padding:var(--space-12);text-align:center;color:var(--color-text-tertiary)">暂无帖子</div>' :
+            ${!posts || posts.length === 0 ? '<div style="padding:var(--space-12);text-align:center;color:var(--color-text-tertiary)">还没有公告，管理员发布后会显示在这里</div>' :
             posts.map(p => `
-                <div class="post-item" data-cat="${esc(p.category)}" onclick="location.hash='#/forum/${p.id}'">
+                <div class="post-item" data-cat="${esc(p.category)}" onclick="location.hash='#/announce/${p.id}'">
                     <div>
                         <div class="post-title">${p.is_pinned ? '<span class="pinned-icon">' + icons.pin + '</span>' : ''}${esc(p.title)}</div>
                         <div class="post-meta">
-                            <span>${esc(p.author?.username || '未知')}</span>
+                            <span>${esc(p.author?.username || '66qn 管理组')}</span>
                             <span>${timeAgo(p.created_at)}</span>
                             <span class="badge badge-gray">${esc(CAT_LABEL[p.category] || p.category)}</span>
                         </div>
                     </div>
                     <div class="post-stats">
-                        <span class="post-stat">${icons.thumb} ${p.likes_count}</span>
-                        <span class="post-stat">${icons.message} ${p.comments_count}</span>
+                        <span class="post-stat">${icons.dashboard} ${p.view_count} 阅读</span>
                     </div>
                 </div>`).join('')}
         </div>
+        <p class="text-tertiary" style="font-size:.75rem;margin-top:var(--space-4);text-align:center">公告由管理组发布，不支持评论和点赞；有问题请到 QQ 群联系管理员</p>
     </div>`;
 
     app.querySelectorAll('.forum-tab').forEach(tab => {
@@ -1317,74 +1346,34 @@ async function renderForum(app) {
     });
 }
 
-// ==================== 页面：帖子详情 ====================
-async function renderForumDetail(app, postId) {
+async function renderAnnouncementDetail(app, postId) {
     app.innerHTML = `<div class="container" style="max-width:720px;margin:0 auto;padding:var(--space-8) var(--space-6)">${loadingBlock()}</div>`;
-    sb && sb.rpc('view_post', { p_id: postId });
+    // 阅读上报：不 await，失败也不能影响正文显示
+    sb && sb.rpc('view_announcement', { p_id: postId, p_visitor: announcementVisitorId(), p_source: 'web' });
 
     const { data: post } = await sb.from('posts')
         .select('*, author:profiles!posts_user_id_fkey(username, avatar_url)')
         .eq('id', postId).maybeSingle();
-    if (!post) { app.innerHTML = '<div class="container" style="padding:var(--space-16);text-align:center">帖子不存在或已删除</div>'; return; }
-
-    const { data: comments } = await sb.from('comments')
-        .select('*, author:profiles!comments_user_id_fkey(username, avatar_url)')
-        .eq('post_id', postId).eq('status', 'published')
-        .order('created_at', { ascending: true });
-
-    let isLiked = false;
-    if (APP.user) {
-        const { data: lk } = await sb.from('likes').select('post_id').eq('post_id', postId).eq('user_id', APP.user.id).maybeSingle();
-        isLiked = !!lk;
-    }
-    const canManage = APP.user && (APP.user.id === post.user_id || APP.isAdmin);
+    if (!post) { app.innerHTML = '<div class="container" style="padding:var(--space-16);text-align:center">公告不存在或已下线</div>'; return; }
 
     app.innerHTML = `
     <div class="container" style="max-width:720px;margin:0 auto;padding:var(--space-8) var(--space-6)">
-        <a href="#/forum" class="btn btn-ghost btn-sm mb-4">${icons.back} 返回列表</a>
+        <a href="#/announce" class="btn btn-ghost btn-sm mb-4">${icons.back} 返回公告列表</a>
         <div class="post-detail-header">
-            <h1 class="post-detail-title">${esc(post.title)}</h1>
+            <h1 class="post-detail-title">${post.is_pinned ? '<span class="pinned-icon">' + icons.pin + '</span>' : ''}${esc(post.title)}</h1>
             <div class="post-detail-meta">
                 ${avatarHtml(post.author, 32)}
-                <span style="font-weight:500">${esc(post.author?.username || '未知')}</span>
+                <span style="font-weight:500">${esc(post.author?.username || '66qn 管理组')}</span>
                 <span class="badge badge-gray">${esc(CAT_LABEL[post.category] || post.category)}</span>
                 <span class="text-tertiary">${timeAgo(post.created_at)}</span>
-                <span class="text-tertiary">${post.view_count} 次浏览</span>
+                <span class="text-tertiary">${post.view_count} 阅读</span>
+                ${post.status !== 'published' ? '<span class="badge badge-red">未发布</span>' : ''}
             </div>
         </div>
         <div class="post-detail-content">${renderMarkdown(post.content)}</div>
-        <div class="post-detail-actions">
-            <button class="btn ${isLiked ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="toggleLike('${postId}')">${icons.thumb} <span id="like-count">${post.likes_count}</span></button>
-            <button class="btn btn-ghost btn-sm" onclick="showReportModal('post','${postId}')">${icons.flag} 举报</button>
-            ${canManage ? `<button class="btn btn-ghost btn-sm" onclick="deletePost('${postId}')">${icons.trash} 删除</button>` : ''}
-        </div>
-        <div class="comment-section">
-            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">评论 (${(comments || []).length})</h3>
-            ${APP.user ? `
-            <div style="display:flex;gap:var(--space-3);margin-bottom:var(--space-6)">
-                ${avatarHtml(APP.user, 32)}
-                <div style="flex:1">
-                    <textarea class="textarea" id="comment-input" placeholder="发表评论..." rows="2"></textarea>
-                    <button class="btn btn-primary btn-sm mt-2" onclick="submitComment('${postId}')">发送</button>
-                </div>
-            </div>` : '<p class="text-secondary mb-4" style="font-size:0.875rem"><a href="#/login" style="color:var(--color-accent)">登录</a> 后发表评论</p>'}
-            <div id="comments-list">
-            ${(comments || []).map(c => `
-                <div class="comment-item">
-                    <div class="comment-header">
-                        ${avatarHtml(c.author, 24)}
-                        <span class="comment-author">${esc(c.author?.username || '未知')}</span>
-                        <span class="comment-time">${timeAgo(c.created_at)}</span>
-                    </div>
-                    <div class="comment-content">${esc(c.content)}</div>
-                    <div class="comment-actions">
-                        ${APP.user ? `<button onclick="replyToComment('${postId}','${c.id}','${esc(c.author?.username || '')}')">回复</button>` : ''}
-                        ${APP.user ? `<button onclick="showReportModal('comment','${c.id}')">${icons.flag} 举报</button>` : ''}
-                        ${(APP.user && (APP.user.id === c.user_id || APP.isAdmin)) ? `<button onclick="deleteComment('${c.id}')">${icons.trash} 删除</button>` : ''}
-                    </div>
-                </div>`).join('')}
-            </div>
-        </div>
+        ${APP.isAdmin ? `<div class="post-detail-actions">
+            <a class="btn btn-ghost btn-sm" href="#/admin/announce">${icons.edit} 编辑这条公告</a>
+        </div>` : ''}
     </div>`;
 }
 
@@ -1399,271 +1388,244 @@ function renderMarkdown(text) {
         .replace(/<p>/g, '<p style="margin-bottom:var(--space-4)">');
 }
 
-async function toggleLike(postId) {
+// ==================== 页面：账号绑定（QNID + 游戏账号 + QQ）====================
+const BIND = { poll: null, countdown: null, deadline: 0 };
+
+// 离开页面时必须清掉这两个定时器，否则路由切走后还在每秒空跑并往已卸载的 DOM 写内容
+function stopBindTimers() {
+    if (BIND.poll) { clearInterval(BIND.poll); BIND.poll = null; }
+    if (BIND.countdown) { clearInterval(BIND.countdown); BIND.countdown = null; }
+    BIND.deadline = 0;
+}
+
+async function renderBind(app) {
     if (!requireLogin()) return;
-    const { data: lk } = await sb.from('likes').select('post_id').eq('post_id', postId).eq('user_id', APP.user.id).maybeSingle();
-    if (lk) {
-        await sb.from('likes').delete().eq('post_id', postId).eq('user_id', APP.user.id);
-        toast('已取消点赞');
-    } else {
-        const { error } = await sb.from('likes').insert({ post_id: postId, user_id: APP.user.id });
-        if (error) return toast(errText(error, '点赞失败'), 'error');
-        toast('已点赞');
-    }
-    APP.route();
-}
+    stopBindTimers();
+    app.innerHTML = `<div class="container" style="max-width:640px;margin:0 auto;padding:var(--space-8) var(--space-6)">${loadingBlock()}</div>`;
 
-async function submitComment(postId) {
-    if (!requireLogin() || !requireAgreement()) return;
-    const input = document.getElementById('comment-input');
-    const content = input.value.trim();
-    if (!content) return toast('请输入评论内容', 'error');
-    if (content.length > 2000) return toast('评论不能超过2000字', 'error');
-    const review = await aiModerate('comment', content);
-    if (review && review.verdict === 'reject') return toast('评论未通过审核：' + (review.reason || '疑似违规'), 'error');
-    const { error } = await sb.from('comments').insert({ post_id: postId, user_id: APP.user.id, content });
-    if (error) return toast(errText(error, '评论失败'), 'error');
-    toast('评论已发送');
-    APP.route();
-}
+    const [info, bindings, qqState] = await Promise.all([
+        Settings.load(),
+        sb.rpc('qnid_my_bindings'),
+        sb.rpc('qq_my_state'),
+    ]);
+    const site = (info && info.site) || {};
+    const qnidOn = site.qnid_bind_enabled !== false;
+    const qqOn = site.qq_bind_enabled === true;   // 依赖邮件链路，默认关，后台勾了才露入口
 
-async function replyToComment(postId, parentId, authorName) {
-    if (!requireLogin()) return;
-    const content = prompt(`回复 ${authorName}:`);
-    if (!content || !content.trim()) return;
-    const { error } = await sb.from('comments').insert({ post_id: postId, user_id: APP.user.id, parent_id: parentId, content: content.trim() });
-    if (error) return toast(errText(error, '回复失败'), 'error');
-    toast('回复已发送');
-    APP.route();
-}
-
-async function deleteComment(commentId) {
-    if (!confirm('确定删除这条评论？')) return;
-    await sb.from('comments').update({ status: 'deleted' }).eq('id', commentId);
-    toast('评论已删除');
-    APP.route();
-}
-
-async function deletePost(postId) {
-    if (!confirm('确定删除这个帖子？')) return;
-    await sb.from('posts').update({ status: 'deleted' }).eq('id', postId);
-    toast('帖子已删除');
-    location.hash = '#/forum';
-}
-
-function showReportModal(type, id) {
-    if (!requireLogin()) return;
-    showModal('举报', `
-        <p style="font-size:0.875rem;color:var(--color-text-secondary);margin-bottom:var(--space-4)">请描述举报原因（至少10个字符）：</p>
-        <textarea class="textarea" id="report-reason" placeholder="举报理由..." rows="4"></textarea>`, `
-        <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
-        <button class="btn btn-danger btn-sm" onclick="submitReport('${type}','${id}')">提交举报</button>`);
-}
-
-async function submitReport(type, id) {
-    if (!requireAgreement()) return;
-    const reason = document.getElementById('report-reason').value.trim();
-    if (reason.length < 10) return toast('举报理由至少需要10个字符', 'error');
-    const { data, error } = await sb.from('reports').insert({ reporter_id: APP.user.id, target_type: type, target_id: id, reason }).select().maybeSingle();
-    if (error) return toast(errText(error, '举报失败'), 'error');
-    document.querySelector('.modal-overlay')?.remove();
-    toast('举报已提交，AI 正在复核');
-    // 交由 AI 复核，判定应删除时自动删除
-    try {
-        const { data: rv } = await sb.functions.invoke(AI_FN, { body: { action: 'review_report', report_id: data.id } });
-        if (rv && rv.autoDeleted) toast('AI 已判定违规并自动删除相关内容', 'success');
-    } catch { /* AI 未配置时静默 */ }
-}
-
-// ==================== 页面：发帖 ====================
-function renderForumNew(app) {
-    if (!requireLogin()) return;
-    const cats = CATEGORIES.filter(c => c.key && (c.key !== 'announcement' || APP.isAdmin));
     app.innerHTML = `
     <div class="container" style="max-width:640px;margin:0 auto;padding:var(--space-8) var(--space-6)">
-        <a href="#/forum" class="btn btn-ghost btn-sm mb-4">${icons.back} 返回列表</a>
-        <h1 class="section-title" style="font-size:1.5rem">发布新帖</h1>
-        <div class="form-group"><label class="form-label">分类</label>
-            <select class="input" id="post-category">${cats.map(c => `<option value="${c.key}">${c.label}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">标题 <span class="text-tertiary">(5-100字)</span></label>
-            <input class="input" id="post-title" placeholder="帖子标题" maxlength="100"></div>
-        <div class="form-group"><label class="form-label">正文 <span class="text-tertiary">(支持基础 Markdown)</span></label>
-            <textarea class="textarea" id="post-content" placeholder="帖子内容..." rows="10" style="min-height:200px"></textarea></div>
-        <div style="display:flex;gap:var(--space-3);justify-content:flex-end">
-            <a href="#/forum" class="btn btn-secondary">取消</a>
-            <button class="btn btn-primary" onclick="submitPost()">发布</button></div>
+        <h1 class="section-title" style="font-size:1.5rem">账号绑定</h1>
+        <p class="text-secondary mb-8" style="font-size:.875rem">
+            你的 QNID：<code style="font-size:1rem">${esc((APP.user && APP.user.qnid) || '—')}</code>
+        </p>
+        ${qnidOn ? `<div class="card mb-8" id="qnid-card">${qnidBindHtml()}</div>` :
+        '<div class="card mb-8"><p class="text-secondary" style="font-size:.875rem">绑定功能暂未开放，请稍后再来看。</p></div>'}
+        <div class="card mb-8" id="qnid-list-card">${qnidListHtml(bindings.data || [])}</div>
+        ${qqOn ? `<div class="card mb-8" id="qq-card">${qqHtml(qqState.data || {})}</div>` : ''}
+        <div class="card">
+            <h3 class="pc-card-title">为什么要绑定</h3>
+            <p class="text-secondary" style="font-size:.875rem;line-height:1.9">
+                正版账号进服免密码，离线账号也能进服，但没绑定 QNID 之前会受限：<br>
+                · 正版每天限玩 2 小时，离线账号每天限玩 1 小时（北京时间 0 点重置）；<br>
+                · 受限期间禁止放置岩浆、TNT 等危险品。<br>
+                绑定完成后以上限制全部解除。进服时聊天框也会提示你当前状态。
+            </p>
+            <a class="btn btn-ghost btn-sm" style="margin-top:.5rem" href="#/announce">去看《登录方式与 QNID 绑定教程》</a>
+        </div>
     </div>`;
-}
 
-async function submitPost() {
-    if (!requireLogin() || !requireAgreement()) return;
-    const title = document.getElementById('post-title').value.trim();
-    const content = document.getElementById('post-content').value.trim();
-    const category = document.getElementById('post-category').value;
-    if (title.length < 5) return toast('标题至少5个字符', 'error');
-    if (content.length < 10) return toast('正文至少10个字符', 'error');
-
-    // AI 审核（未配置模型时自动跳过）
-    toast('正在审核内容…');
-    const review = await aiModerate('post', `${title}\n${content}`);
-    if (review && review.verdict === 'reject') {
-        await sb.from('ai_reviews').insert({ target_type: 'post', target_id: APP.user.id, verdict: 'reject', reason: review.reason || '', model: review.model || '' });
-        return toast('内容未通过审核：' + (review.reason || '疑似违规'), 'error');
+    // 已有未过期的码（比如刚申请就刷新了页面），重新把倒计时和轮询接上
+    const st = await sb.rpc('qnid_code_status');
+    if (st.data && st.data.status === 'pending' && st.data.code) {
+        startCodeFlow(st.data.code, st.data.game_username, st.data.expires_at);
     }
-
-    const { error } = await sb.from('posts').insert({ user_id: APP.user.id, title, content, category });
-    if (error) return toast(errText(error, '发布失败'), 'error');
-    toast('帖子已发布');
-    location.hash = '#/forum';
 }
 
-// 调用 AI 审核（失败或未配置时返回 null，不阻断发布）
-async function aiModerate(targetType, content) {
-    try {
-        const { data, error } = await sb.functions.invoke(AI_FN, { body: { action: 'moderate', target_type: targetType, content } });
-        if (error || !data || data.error) return null;
-        return data;
-    } catch { return null; }
+function qnidBindHtml() {
+    return `
+        <h3 class="pc-card-title">绑定游戏账号</h3>
+        <p class="text-secondary" style="font-size:.875rem;margin-bottom:var(--space-4)">
+            填你进服用的游戏账号，点「立即绑定」拿到 4 位校验码，然后进游戏在聊天框输入
+            <code>/QNID 校验码</code> 就完成了。校验码 10 分钟内有效，只对这一个游戏账号生效。
+        </p>
+        <div id="qnid-form">
+            <div class="form-group"><label class="form-label">游戏账号</label>
+                <input class="input" id="bind-game-username" maxlength="16" placeholder="进服用的英文/数字 ID，区分大小写没关系" autocomplete="off"></div>
+            <button class="btn btn-primary" onclick="qnidRequestCode()">立即绑定</button>
+        </div>
+        <div id="qnid-code-box" style="display:none"></div>`;
 }
 
-// ==================== 页面：私信列表 ====================
-async function renderMessages(app) {
-    if (!requireLogin()) return;
-    app.innerHTML = `<div class="container" style="max-width:800px;margin:0 auto;padding:var(--space-8) var(--space-6)">${loadingBlock()}</div>`;
-    const { data: messages } = await sb.from('messages')
-        .select('*')
-        .or(`sender_id.eq.${APP.user.id},receiver_id.eq.${APP.user.id}`)
-        .order('created_at', { ascending: false })
-        .limit(500);
-    const { data: allUsers } = await sb.from('profiles').select('id, username, avatar_url');
-    const userMap = Object.fromEntries((allUsers || []).map(u => [u.id, u]));
+function qnidListHtml(list) {
+    const rows = (list || []).map(b => `
+        <div class="pc-row">
+            <div>
+                <div class="pc-row-label">${esc(b.game_username)}
+                    <span class="badge ${b.premium ? 'badge-green' : 'badge-gray'}">${b.premium ? '正版' : '离线'}</span>
+                </div>
+                <div class="pc-row-value text-tertiary" style="font-size:.75rem">
+                    绑定于 ${new Date(b.bound_at).toLocaleString('zh-CN')}
+                    ${b.last_seen_at ? ' · 最近进服 ' + timeAgo(b.last_seen_at) : ' · 还没进过服'}
+                </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="qnidUnbindBinding('${b.id}','${esc(b.game_username)}')">解绑</button>
+        </div>`).join('');
+    return `
+        <h3 class="pc-card-title">已绑定的游戏账号</h3>
+        ${rows || '<p class="text-tertiary" style="font-size:.875rem">还没有绑定任何游戏账号。一个 QNID 最多绑 3 个。</p>'}`;
+}
 
-    const convs = {};
-    (messages || []).forEach(m => {
-        if (m.status === 'recalled' && m.sender_id !== APP.user.id) return;
-        const otherId = m.sender_id === APP.user.id ? m.receiver_id : m.sender_id;
-        if (!convs[otherId]) {
-            convs[otherId] = { other: userMap[otherId] || { username: '未知用户' }, last: m, unread: 0 };
+function qqHtml(state) {
+    if (state.bound) {
+        return `
+        <h3 class="pc-card-title">QQ 绑定</h3>
+        <div class="pc-row">
+            <div><div class="pc-row-label">已绑定 QQ</div>
+                <div class="pc-row-value">${esc(state.qq)} → ${esc(state.mail_to)}</div></div>
+            <button class="btn btn-ghost btn-sm" onclick="qqUnbind()">解绑</button>
+        </div>
+        <p class="text-tertiary" style="font-size:.75rem;margin-top:.5rem">解绑后管理员只能通过登录邮箱联系你，非必要不建议解绑。</p>`;
+    }
+    return `
+        <h3 class="pc-card-title">绑定 QQ 号</h3>
+        <p class="text-secondary" style="font-size:.875rem;margin-bottom:var(--space-4)">
+            填 QQ 号，系统会往 <code>你的QQ号@qq.com</code> 发一封带 6 位验证码的邮件，填码即完成绑定。
+            收不到信先去垃圾邮件里翻翻。
+        </p>
+        <div class="form-group"><label class="form-label">QQ 号</label>
+            <input class="input" id="qq-input" maxlength="11" inputmode="numeric" placeholder="例如 123456789" autocomplete="off"></div>
+        <div style="display:flex;gap:var(--space-3);flex-wrap:wrap">
+            <button class="btn btn-primary" id="qq-send-btn" onclick="qqSendCode()">发送验证码</button>
+        </div>
+        <div id="qq-code-box" style="display:none;margin-top:var(--space-4)">
+            <div class="form-group"><label class="form-label">邮件里的 6 位验证码</label>
+                <input class="input" id="qq-code" maxlength="6" inputmode="numeric" placeholder="000000"></div>
+            <button class="btn btn-primary" onclick="qqConfirmCode()">确认绑定</button>
+        </div>`;
+}
+
+async function qnidRequestCode() {
+    const el = document.getElementById('bind-game-username');
+    const name = (el && el.value || '').trim();
+    if (!/^[A-Za-z0-9_]{2,16}$/.test(name)) return toast('游戏账号只能是 2-16 位字母、数字或下划线', 'error');
+    const btn = document.querySelector('#qnid-form .btn-primary');
+    if (btn) btn.disabled = true;
+    const { data, error } = await sb.rpc('qnid_request_code', { p_game_username: name });
+    if (btn) btn.disabled = false;
+    if (error) return toast(errText(error, '申请失败，请稍后再试'), 'error');
+    if (!data || !data.ok) return toast((data && data.error) || '申请失败，请稍后再试', 'error');
+    startCodeFlow(data.code, data.game_username, data.expires_at);
+}
+
+// 拿到码之后：显示大数字 + 10 分钟倒计时 + 每 3 秒问一次服务端有没有被核销
+function startCodeFlow(code, username, expiresAt) {
+    stopBindTimers();
+    const box = document.getElementById('qnid-code-box');
+    if (!box) return;
+    BIND.deadline = new Date(expiresAt).getTime();
+    box.style.display = 'block';
+    const draw = (remainMs) => {
+        const m = Math.max(0, Math.floor(remainMs / 60000));
+        const s = Math.max(0, Math.floor((remainMs % 60000) / 1000));
+        box.innerHTML = `
+            <div class="form-label">校验码（给 <strong>${esc(username)}</strong> 用）</div>
+            <div style="font-size:2.5rem;font-weight:700;letter-spacing:.4em;color:var(--color-accent);margin:.5rem 0">${esc(code)}</div>
+            <p class="text-secondary" style="font-size:.875rem">进游戏后在聊天框输入：<code>/QNID ${esc(code)}</code></p>
+            <p class="text-tertiary" style="font-size:.75rem;margin-top:.35rem">剩余 ${m} 分 ${String(s).padStart(2, '0')} 秒 · 绑定成功本页会自动提示</p>
+            <button class="btn btn-ghost btn-sm" style="margin-top:.5rem" onclick="copyText('${esc(code)}').then(()=>toast('校验码已复制'))">复制校验码</button>
+            <button class="btn btn-ghost btn-sm" style="margin-top:.5rem" onclick="qnidCancelCode()">作废这个码</button>`;
+    };
+    draw(BIND.deadline - Date.now());
+    BIND.countdown = setInterval(() => {
+        const remain = BIND.deadline - Date.now();
+        if (remain <= 0) {
+            stopBindTimers();
+            box.innerHTML = '<p class="text-tertiary" style="font-size:.875rem">校验码已过期，重新点「立即绑定」拿一个新的。</p>';
+            return;
         }
-        if (m.receiver_id === APP.user.id && m.status === 'sent') convs[otherId].unread++;
-    });
-    const convList = Object.values(convs).sort((a, b) => new Date(b.last.created_at) - new Date(a.last.created_at));
-
-    app.innerHTML = `
-    <div class="container" style="max-width:800px;margin:0 auto;padding:var(--space-8) var(--space-6)">
-        <div class="forum-toolbar" style="margin-bottom:var(--space-4)">
-            <h1 class="section-title" style="font-size:1.5rem;margin-bottom:0">私信</h1>
-            <button class="btn btn-primary btn-sm" onclick="showNewMessageModal()">发起私信</button>
-        </div>
-        <div class="card" style="padding:0;overflow:hidden">
-            ${convList.length === 0 ? '<div style="padding:var(--space-12);text-align:center;color:var(--color-text-tertiary)">暂无私信，点击右上角发起对话</div>' :
-            convList.map(c => `
-                <div class="conversation-item" data-other="${Object.keys(convs).find(k => convs[k] === c)}">
-                    ${avatarHtml(c.other, 32)}
-                    <div style="flex:1;min-width:0">
-                        <div class="conversation-name">${esc(c.other.username)}</div>
-                        <div class="conversation-preview">${c.last.status === 'recalled' ? '[已撤回]' : esc(c.last.content.slice(0, 30))}</div>
-                    </div>
-                    ${c.unread > 0 ? `<span class="badge badge-blue conversation-badge">${c.unread}</span>` : ''}
-                </div>`).join('')}
-        </div>
-    </div>`;
-
-    app.querySelectorAll('.conversation-item').forEach(el => {
-        el.onclick = () => { location.hash = '#/messages/' + el.dataset.other; };
-    });
+        draw(remain);
+    }, 1000);
+    BIND.poll = setInterval(qnidPollStatus, 3000);
 }
 
-async function showNewMessageModal() {
-    if (!requireLogin()) return;
-    const { data: users } = await sb.from('profiles').select('id, username').neq('id', APP.user.id).eq('status', 'active').order('username');
-    showModal('选择用户', `
-        <input class="input" id="user-search" placeholder="搜索用户名..." oninput="filterUserList(this.value)" style="margin-bottom:var(--space-3)">
-        <div id="user-list" style="max-height:300px;overflow-y:auto">
-        ${(users || []).map(u => `<div class="conversation-item" data-uid="${u.id}">${avatarHtml(u, 24)}<span style="font-size:0.875rem">${esc(u.username)}</span></div>`).join('') || '<div style="padding:var(--space-6);color:var(--color-text-tertiary)">暂无其他用户</div>'}
-        </div>`, `<button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>`);
-    document.querySelectorAll('#user-list .conversation-item').forEach(el => {
-        el.onclick = () => { document.querySelector('.modal-overlay')?.remove(); location.hash = '#/messages/' + el.dataset.uid; };
-    });
+async function qnidPollStatus() {
+    const { data } = await sb.rpc('qnid_code_status');
+    if (!data) return;
+    if (data.status === 'used') {
+        stopBindTimers();
+        toast('绑定成功，进服限制已解除');
+        const box = document.getElementById('qnid-code-box');
+        if (box) box.innerHTML = `<p style="font-size:.875rem;color:var(--color-success)"><strong>绑定成功</strong>：${esc(data.redeemed_by || data.game_username || '')} 已绑到你的 QNID，现在进服不受时长限制了。</p>`;
+        const listCard = document.getElementById('qnid-list-card');
+        if (listCard) {
+            const r = await sb.rpc('qnid_my_bindings');
+            listCard.innerHTML = qnidListHtml(r.data || []);
+        }
+    } else if (data.status === 'expired' || data.status === 'cancelled' || data.status === 'rejected') {
+        stopBindTimers();
+    }
 }
-function filterUserList(q) {
-    q = q.trim().toLowerCase();
-    document.querySelectorAll('#user-list .conversation-item').forEach(el => {
-        el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
+
+async function qnidCancelCode() {
+    await sb.rpc('qnid_cancel_code');
+    stopBindTimers();
+    const box = document.getElementById('qnid-code-box');
+    if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+    toast('校验码已作废');
+}
+
+// 解绑属于账号安全操作：二次确认 + 当前密码
+function qnidUnbindBinding(id, username) {
+    if (!confirm(`确定解绑游戏账号 ${username}？解绑后这个账号进服会重新受时长限制。`)) return;
+    confirmWithPassword(`即将解绑游戏账号 <strong>${esc(username)}</strong>，请输入当前登录密码确认是本人操作。`, async () => {
+        const { data, error } = await sb.rpc('qnid_unbind', { p_binding: id });
+        if (error) return toast(errText(error, '解绑失败'), 'error');
+        if (!data) return toast('解绑失败：这条绑定可能已经不存在了', 'error');
+        toast('已解绑');
+        renderBind(document.getElementById('app'));
     });
 }
 
-// ==================== 页面：私信详情 ====================
-async function renderMessageDetail(app, otherId) {
-    if (!requireLogin()) return;
-    app.innerHTML = `<div class="container" style="max-width:720px;margin:0 auto;padding:var(--space-8) var(--space-6)">${loadingBlock()}</div>`;
-    const { data: other } = await sb.from('profiles').select('id, username, avatar_url').eq('id', otherId).maybeSingle();
-    const { data: messages } = await sb.from('messages')
-        .select('*')
-        .or(`and(sender_id.eq.${APP.user.id},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${APP.user.id})`)
-        .order('created_at', { ascending: true })
-        .limit(200);
-    sb.rpc('mark_messages_read', { p_other: otherId });
-
-    app.innerHTML = `
-    <div class="container" style="max-width:720px;margin:0 auto;padding:var(--space-8) var(--space-6)">
-        <a href="#/messages" class="btn btn-ghost btn-sm mb-4">${icons.back} 返回私信</a>
-        <div class="card" style="padding:0;overflow:hidden">
-            <div class="chat-header"><div class="flex-center" style="gap:var(--space-3)">
-                ${avatarHtml(other, 32)}<span>${esc(other?.username || '未知用户')}</span>
-            </div></div>
-            <div class="chat-messages" id="chat-messages" style="min-height:300px;max-height:60vh">
-                ${(messages || []).map(m => {
-                    if (m.status === 'recalled') return `<div class="chat-bubble-recalled">消息已撤回</div>`;
-                    const isMine = m.sender_id === APP.user.id;
-                    return `
-                    <div class="chat-bubble ${isMine ? 'chat-bubble-mine' : 'chat-bubble-other'}">
-                        ${esc(m.content)}
-                        <div class="chat-bubble-time">${fmtTime(m.created_at)}</div>
-                        ${isMine ? `
-                        <div class="chat-bubble-actions">
-                            <button class="btn-icon" style="background:rgba(255,255,255,0.2);width:24px;height:24px" onclick="recallMessage('${m.id}')" title="撤回（2分钟内）">${icons.undo}</button>
-                        </div>` : `
-                        <div class="chat-bubble-actions">
-                            <button class="btn-icon" style="background:var(--color-bg-tertiary);width:24px;height:24px" onclick="copyMessage('${m.id}')" title="复制">${icons.copy}</button>
-                            <button class="btn-icon" style="background:var(--color-bg-tertiary);width:24px;height:24px" onclick="showReportModal('message','${m.id}')" title="举报">${icons.flag}</button>
-                        </div>`}
-                    </div>`;
-                }).join('')}
-            </div>
-            <div class="chat-input-area">
-                <input class="input" id="msg-input" placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendMessage('${otherId}')">
-                <button class="btn btn-primary btn-sm" onclick="sendMessage('${otherId}')">${icons.send}</button>
-            </div>
-        </div>
-    </div>`;
-    const chatEl = document.getElementById('chat-messages');
-    chatEl.scrollTop = chatEl.scrollHeight;
+async function qqSendCode() {
+    const qq = (document.getElementById('qq-input').value || '').trim();
+    if (!/^[1-9][0-9]{4,10}$/.test(qq)) return toast('QQ 号不对：应为 5-11 位数字，且不能以 0 开头', 'error');
+    const btn = document.getElementById('qq-send-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '发送中…'; }
+    try {
+        const { data, error } = await sb.functions.invoke(AI_FN, { body: { action: 'qq_bind', qq } });
+        if (error) throw error;
+        if (!data || !data.ok) throw new Error((data && data.error) || '发送失败');
+        document.getElementById('qq-code-box').style.display = 'block';
+        toast('验证码已发到 ' + qq + '@qq.com，去邮箱里看看');
+    } catch (e) {
+        toast('发送失败：' + ((e && e.message) || '邮件通道未就绪，请联系管理员'), 'error');
+    } finally {
+        const b2 = document.getElementById('qq-send-btn');
+        if (b2) { b2.disabled = false; b2.textContent = '重新发送'; }
+    }
 }
 
-async function sendMessage(receiverId) {
-    if (!requireLogin()) return;
-    const input = document.getElementById('msg-input');
-    const content = input.value.trim();
-    if (!content) return;
-    if (content.length > 5000) return toast('消息过长', 'error');
-    input.value = '';
-    const { error } = await sb.from('messages').insert({ sender_id: APP.user.id, receiver_id: receiverId, content });
-    if (error) return toast(errText(error, '发送失败'), 'error');
-    APP.route();
+async function qqConfirmCode() {
+    const code = (document.getElementById('qq-code').value || '').trim();
+    if (!/^[0-9]{6}$/.test(code)) return toast('请输入邮件里的 6 位验证码', 'error');
+    const { data, error } = await sb.rpc('qq_confirm_bind', { p_code: code });
+    if (error) return toast(errText(error, '验证失败'), 'error');
+    if (!data || !data.ok) return toast((data && data.error) || '验证失败', 'error');
+    toast('QQ 绑定成功');
+    renderBind(document.getElementById('app'));
 }
 
-async function recallMessage(msgId) {
-    const { data: ok } = await sb.rpc('recall_message', { p_id: msgId });
-    if (!ok) return toast('只能撤回自己2分钟内发送的消息', 'error');
-    toast('消息已撤回');
-    APP.route();
+function qqUnbind() {
+    if (!confirm('确定解绑 QQ 号？')) return;
+    confirmWithPassword('即将解绑你的 QQ 号，请输入当前登录密码确认是本人操作。', async () => {
+        const { data, error } = await sb.rpc('qq_unbind_self');
+        if (error) return toast(errText(error, '解绑失败'), 'error');
+        if (!data) return toast('你还没有绑定 QQ', 'error');
+        toast('已解绑');
+        renderBind(document.getElementById('app'));
+    });
 }
 
-async function copyMessage(msgId) {
-    const { data: m } = await sb.from('messages').select('content, status').eq('id', msgId).maybeSingle();
-    if (m && m.status !== 'recalled') navigator.clipboard.writeText(m.content).then(() => toast('已复制'));
-}
 
 // ==================== 页面：登录 / 注册 ====================
 // 登录 / 注册 / 申请 / 邮箱验证这四页共用右侧主城实拍图
@@ -2052,6 +2014,12 @@ async function renderProfile(app, userId) {
     const isMe = APP.user && APP.user.id === userId;
     const ids = isMe ? await myIdentities() : null;
     const ghBound = !!(ids || []).find(i => i.provider === 'github');
+    // 绑定情况只有本人看自己那份有意义（RLS 也只看得到自己的），别人主页不查
+    const [bindRes, qqRes] = isMe
+        ? await Promise.all([sb.rpc('qnid_my_bindings'), sb.rpc('qq_my_state')])
+        : [{ data: [] }, { data: {} }];
+    const myBinds = bindRes.data || [];
+    const qqState = qqRes.data || {};
 
     app.innerHTML = `
     <div class="container" style="max-width:640px;margin:0 auto;padding:var(--space-8) var(--space-6)">
@@ -2073,12 +2041,37 @@ async function renderProfile(app, userId) {
             <div class="form-group"><label class="form-label">用户名</label>
                 <input class="input" value="${esc(user.username)}" disabled>
                 <p class="text-tertiary" style="font-size:.75rem;margin-top:.35rem">用户名不能自己改，需要改请联系管理员</p></div>
-            <div class="form-group"><label class="form-label">游戏 ID</label>
-                <input class="input" id="my-game-id" value="${esc(user.game_id || '')}" maxlength="32" placeholder="进服用的游戏 ID">
-                <button class="btn btn-secondary btn-sm" style="margin-top:.5rem" onclick="saveGameId()">保存游戏 ID</button></div>
+            <div class="form-group"><label class="form-label">游戏 ID（资料展示，未验证）</label>
+                <input class="input" id="my-game-id" value="${esc(user.game_id || '')}" maxlength="32" placeholder="只是挂在主页上给人看">
+                <button class="btn btn-secondary btn-sm" style="margin-top:.5rem" onclick="saveGameId()">保存游戏 ID</button>
+                <p class="text-tertiary" style="font-size:.75rem;margin-top:.35rem">这个字段不影响进服资格。真正被服务器认可是下面「账号绑定」里用校验码绑定的游戏账号。</p></div>
             <div class="form-group"><label class="form-label">个人简介</label>
                 <textarea class="textarea" id="my-bio" rows="2" maxlength="200">${esc(user.bio || '')}</textarea>
                 <button class="btn btn-secondary btn-sm" style="margin-top:.5rem" onclick="saveBio()">保存简介</button></div>
+        </div>
+
+        <div class="card mb-8">
+            <h3 class="pc-card-title">账号绑定</h3>
+            <div class="pc-row">
+                <div><div class="pc-row-label">我的 QNID</div>
+                    <div class="pc-row-value">${esc((APP.user && APP.user.qnid) || '—')}</div></div>
+                <span class="badge ${myBinds.length ? 'badge-green' : 'badge-red'}">${myBinds.length ? '已绑 ' + myBinds.length + ' 个游戏账号' : '未绑定，进服受限'}</span>
+            </div>
+            ${myBinds.length ? myBinds.map(b => `
+                <div class="pc-row">
+                    <div><div class="pc-row-label">${esc(b.game_username)}
+                        <span class="badge ${b.premium ? 'badge-green' : 'badge-gray'}">${b.premium ? '正版' : '离线'}</span></div>
+                        <div class="pc-row-value text-tertiary" style="font-size:.75rem">
+                            ${b.last_seen_at ? '最近进服 ' + timeAgo(b.last_seen_at) : '绑定后还没进过服'}
+                        </div></div>
+                </div>`).join('') : ''}
+            ${qqState && qqState.bound ? `
+            <div class="pc-row">
+                <div><div class="pc-row-label">QQ</div>
+                    <div class="pc-row-value">${esc(qqState.qq)} → ${esc(qqState.mail_to)}</div></div>
+                <span class="badge badge-green">已绑定</span>
+            </div>` : ''}
+            <button class="btn btn-primary btn-sm" style="margin-top:var(--space-4)" onclick="location.hash='#/bind'">${icons.edit} 去管理绑定</button>
         </div>
 
         <div class="card mb-8">
@@ -2106,14 +2099,14 @@ async function renderProfile(app, userId) {
             <h3 class="pc-card-title">已授权的 AI</h3>
             <div id="my-grants">${loadingBlock()}</div>
         </div>` : ''}
-        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">发布的帖子</h3>
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">历史发布</h3>
         <div class="card" style="padding:0;overflow:hidden">
-            ${!posts || posts.length === 0 ? '<div style="padding:var(--space-8);text-align:center;color:var(--color-text-tertiary)">暂无帖子</div>' :
+            ${!posts || posts.length === 0 ? '<div style="padding:var(--space-8);text-align:center;color:var(--color-text-tertiary)">没有内容</div>' :
             posts.map(p => `
-                <div class="post-item" onclick="location.hash='#/forum/${p.id}'">
+                <div class="post-item" onclick="location.hash='#/announce/${p.id}'">
                     <div><div class="post-title">${esc(p.title)}</div>
                         <div class="post-meta"><span>${timeAgo(p.created_at)}</span><span class="badge badge-gray">${esc(CAT_LABEL[p.category] || p.category)}</span></div></div>
-                    <div class="post-stats"><span class="post-stat">${icons.thumb} ${p.likes_count}</span><span class="post-stat">${icons.message} ${p.comments_count}</span></div>
+                    <div class="post-stats"><span class="post-stat">${icons.dashboard} ${p.view_count} 阅读</span></div>
                 </div>`).join('')}
         </div>
     </div>`;
@@ -2367,10 +2360,11 @@ async function renderAdmin(app, sub) {
     const navItems = [
         { key: 'dashboard', label: '仪表盘', icon: icons.dashboard },
         { key: 'users', label: '用户管理', icon: icons.users },
-        { key: 'posts', label: '帖子管理', icon: icons.message },
-        { key: 'comments', label: '评论管理', icon: icons.message },
+        { key: 'announce', label: '公告发布', icon: icons.flag },
+        { key: 'comments', label: '历史评论', icon: icons.message },
         { key: 'reports', label: '举报管理', icon: icons.flag },
-        { key: 'announcement', label: '公告管理', icon: icons.flag },
+        { key: 'bindings', label: '账号绑定', icon: icons.shield },
+        { key: 'banner', label: '顶部横幅与开关', icon: icons.settings },
         { key: 'features', label: '玩法特色', icon: icons.cube },
         { key: 'commands', label: '服务器指令', icon: icons.settings },
         { key: 'applications', label: '注册申请审核', icon: icons.flag },
@@ -2384,20 +2378,25 @@ async function renderAdmin(app, sub) {
         { key: 'agreement', label: '协议设置', icon: icons.flag },
         { key: 'server', label: '服务器设置', icon: icons.settings },
     ];
+    // 侧栏高亮：老链接 #/admin/posts 会落到公告页，高亮也跟着走
+    const activeKey = sub === 'posts' ? 'announce' : (sub === 'announcement' ? 'banner' : sub);
     app.innerHTML = `
     <div class="admin-layout">
         <div class="admin-sidebar">
-            ${navItems.map(n => `<a href="#/admin/${n.key}" class="admin-nav-link ${sub === n.key ? 'active' : ''}">${n.icon} ${n.label}</a>`).join('')}
+            ${navItems.map(n => `<a href="#/admin/${n.key}" class="admin-nav-link ${activeKey === n.key ? 'active' : ''}">${n.icon} ${n.label}</a>`).join('')}
         </div>
         <div class="admin-content" id="admin-content">${loadingBlock()}</div>
     </div>`;
     const content = document.getElementById('admin-content');
     switch (sub) {
         case 'users': renderAdminUsers(content); break;
-        case 'posts': renderAdminPosts(content); break;
+        case 'announce':
+        case 'posts': renderAdminAnnounce(content); break;
         case 'comments': renderAdminComments(content); break;
         case 'reports': renderAdminReports(content); break;
-        case 'announcement': renderAdminAnnouncement(content); break;
+        case 'bindings': renderAdminBindings(content); break;
+        case 'banner':
+        case 'announcement': renderAdminBanner(content); break;
         case 'features': renderAdminTable(content, 'game_features'); break;
         case 'commands': renderAdminTable(content, 'server_commands'); break;
         case 'applications': renderAdminApplications(content); break;
@@ -2415,22 +2414,25 @@ async function renderAdmin(app, sub) {
 }
 
 async function renderAdminDashboard(el) {
-    const [u, p, c, r] = await Promise.all([
+    const [u, p, c, r, bind] = await Promise.all([
         sb.from('profiles').select('id', { count: 'exact', head: true }),
         sb.from('posts').select('id', { count: 'exact', head: true }).eq('status', 'published'),
         sb.from('comments').select('id', { count: 'exact', head: true }).eq('status', 'published'),
         sb.from('reports').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+        sb.rpc('admin_list_bindings', { p_limit: 500 }),
     ]);
+    const boundCount = ((bind && bind.data) || []).filter(b => b.status === 'bound').length;
     const { data: recent } = await sb.from('posts').select('title, created_at').order('created_at', { ascending: false }).limit(5);
     el.innerHTML = `
         <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">仪表盘</h2>
         <div class="stat-cards">
             <div class="card stat-card"><div class="stat-card-value">${u.count || 0}</div><div class="stat-card-label">注册用户</div></div>
-            <div class="card stat-card"><div class="stat-card-value">${p.count || 0}</div><div class="stat-card-label">发布帖子</div></div>
-            <div class="card stat-card"><div class="stat-card-value">${c.count || 0}</div><div class="stat-card-label">评论数量</div></div>
+            <div class="card stat-card"><div class="stat-card-value">${p.count || 0}</div><div class="stat-card-label">在线公告</div></div>
+            <div class="card stat-card"><div class="stat-card-value">${boundCount}</div><div class="stat-card-label">已绑游戏账号</div></div>
             <div class="card stat-card"><div class="stat-card-value">${r.count || 0}</div><div class="stat-card-label">待处理举报</div></div>
         </div>
-        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">最近帖子</h3>
+        <p class="text-tertiary" style="font-size:.75rem;margin-bottom:var(--space-4)">历史评论 ${c.count || 0} 条（社区改版后不再新增，只做留档）</p>
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">最近公告</h3>
         <div class="card" style="padding:0;overflow:hidden">
             <table class="data-table"><thead><tr><th>内容</th><th>时间</th></tr></thead>
             <tbody>${(recent || []).map(x => `<tr><td>${esc(x.title)}</td><td>${timeAgo(x.created_at)}</td></tr>`).join('')}</tbody></table>
@@ -2516,43 +2518,280 @@ async function adminSetRole(uid, role) {
     renderAdminUsers(document.getElementById('admin-content'));
 }
 
-async function renderAdminPosts(el) {
-    const { data: posts } = await sb.from('posts').select('*, author:profiles!posts_user_id_fkey(username)').order('created_at', { ascending: false }).limit(200);
+// ==================== 后台：公告发布与阅读数据 ====================
+// 一个页面搞定三件事：发布/编辑公告（免审核，写完直接 published）、看每条公告的阅读量、
+// 看近 14 天的每日阅读量（站内与游戏内分开）。
+// 原来单独的「帖子管理」并到这里，社区时代的历史帖子一样能置顶/隐藏/删除，功能没缩水。
+
+let ANN_EDITING = null;   // 正在编辑的公告 id，null 表示新建
+
+async function renderAdminAnnounce(el) {
+    ANN_EDITING = null;
     el.innerHTML = `
-        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">帖子管理</h2>
-        <div class="card" style="padding:0;overflow:hidden">
-            <table class="data-table">
-                <thead><tr><th>标题</th><th>作者</th><th>分类</th><th>状态</th><th>操作</th></tr></thead>
-                <tbody>${(posts || []).map(p => `
-                    <tr>
-                        <td><a href="#/forum/${p.id}" style="color:var(--color-accent)">${esc(p.title)}</a></td>
-                        <td>${esc(p.author?.username || '未知')}</td>
-                        <td><span class="badge badge-gray">${esc(CAT_LABEL[p.category] || p.category)}</span></td>
-                        <td><span class="badge ${p.status === 'published' ? 'badge-green' : 'badge-red'}">${p.status}</span></td>
-                        <td>
-                            <button class="btn btn-ghost btn-sm" onclick="adminTogglePost('${p.id}','${p.status}')">${p.status === 'published' ? '隐藏' : '恢复'}</button>
-                            <button class="btn btn-ghost btn-sm" onclick="adminTogglePin('${p.id}',${p.is_pinned ? 'false' : 'true'})">${p.is_pinned ? '取消置顶' : '置顶'}</button>
-                            <button class="btn btn-ghost btn-sm" onclick="adminDeletePost('${p.id}')">删除</button>
-                        </td>
-                    </tr>`).join('')}</tbody>
-            </table>
-        </div>`;
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">公告发布</h2>
+        <div class="card mb-8" id="ann-edit-card"></div>
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">每日阅读量</h3>
+        <div class="card mb-8" id="ann-daily">${loadingBlock()}</div>
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">每条公告</h3>
+        <div class="card" style="padding:0;overflow:hidden" id="ann-list">${loadingBlock()}</div>`;
+    renderAnnounceForm(null);
+    renderAnnounceDaily(14);
+    renderAnnounceList();
 }
 
+function renderAnnounceForm(p) {
+    ANN_EDITING = p ? p.id : null;
+    const card = document.getElementById('ann-edit-card');
+    if (!card) return;
+    const cats = CATEGORIES.filter(c => c.key);
+    card.innerHTML = `
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">${p ? '编辑公告' : '发一条新公告'}
+            <span class="text-tertiary" style="font-size:.75rem;font-weight:400">免审核，保存后立即对玩家可见</span></h3>
+        <div class="form-group"><label class="form-label">标题</label>
+            <input class="input" id="ann-title" maxlength="100" placeholder="公告标题" value="${esc(p ? p.title : '')}"></div>
+        <div class="grid-2">
+            <div class="form-group"><label class="form-label">分类</label>
+                <select class="input" id="ann-cat">${cats.map(c =>
+                    `<option value="${c.key}"${p && p.category === c.key ? ' selected' : ''}>${c.label}</option>`).join('')}</select></div>
+            <div class="form-group"><label class="form-label">状态</label>
+                <select class="input" id="ann-status">
+                    <option value="published"${p && p.status === 'hidden' ? '' : ' selected'}>已发布</option>
+                    <option value="hidden"${p && p.status === 'hidden' ? ' selected' : ''}>暂时隐藏</option>
+                </select></div>
+        </div>
+        <div class="form-group"><label class="form-label">正文 <span class="text-tertiary">（支持基础 Markdown：## 标题、**加粗**、1. 列表）</span></label>
+            <textarea class="textarea" id="ann-body" rows="10" style="min-height:220px" placeholder="公告正文…">${esc(p ? p.content : '')}</textarea></div>
+        <label class="flex-center gap-4"><input id="ann-pin" type="checkbox" ${p && p.is_pinned ? 'checked' : ''}> 置顶这条公告</label>
+        <div style="display:flex;gap:var(--space-3);margin-top:var(--space-4);flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="saveAnnouncePost()">${p ? '保存修改' : '发布公告'}</button>
+            ${p ? '<button class="btn btn-secondary" onclick="renderAnnounceForm(null)">改成发新公告</button>' : ''}
+            <button class="btn btn-ghost" onclick="previewAnnounce()">预览</button>
+        </div>
+        <div id="ann-preview" style="display:none;margin-top:var(--space-6);border-top:1px solid var(--color-border);padding-top:var(--space-5)"></div>`;
+    if (!p) draftBind('announce', ['ann-title', 'ann-body', 'ann-cat', 'ann-pin']);
+}
+
+function previewAnnounce() {
+    const box = document.getElementById('ann-preview');
+    const content = document.getElementById('ann-body').value;
+    const title = document.getElementById('ann-title').value.trim() || '（标题还没填）';
+    box.style.display = 'block';
+    box.innerHTML = `<div class="post-detail-header"><h1 class="post-detail-title">${esc(title)}</h1></div>
+        <div class="post-detail-content">${renderMarkdown(content)}</div>`;
+}
+
+async function saveAnnouncePost() {
+    const title = document.getElementById('ann-title').value.trim();
+    const content = document.getElementById('ann-body').value.trim();
+    const category = document.getElementById('ann-cat').value;
+    const pinned = document.getElementById('ann-pin').checked;
+    const status = document.getElementById('ann-status').value;
+    if (title.length < 2) return toast('标题至少 2 个字', 'error');
+    if (content.length < 5) return toast('正文至少 5 个字', 'error');
+    const { data, error } = await sb.rpc('admin_publish_announcement', {
+        p_id: ANN_EDITING, p_title: title, p_content: content,
+        p_category: category, p_pinned: pinned, p_status: status
+    });
+    if (error) return toast(errText(error, '保存失败'), 'error');
+    draftClear('announce');
+    toast(ANN_EDITING ? '公告已更新' : '公告已发布');
+    document.getElementById('ann-title').value = '';
+    document.getElementById('ann-body').value = '';
+    ANN_EDITING = null;
+    renderAnnounceForm(null);
+    renderAnnounceList();
+    renderAnnounceDaily(14);
+}
+
+async function editAnnounce(id) {
+    const { data } = await sb.from('posts').select('*').eq('id', id).maybeSingle();
+    if (!data) return toast('这条公告读不到了', 'error');
+    renderAnnounceForm(data);
+    document.getElementById('ann-edit-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function renderAnnounceDaily(days) {
+    const box = document.getElementById('ann-daily');
+    if (!box) return;
+    const { data, error } = await sb.rpc('admin_announcement_daily', { p_days: days });
+    if (error) { box.innerHTML = `<div style="padding:1rem">${esc(errText(error, '读取失败'))}</div>`; return; }
+    const rows = data || [];
+    const max = Math.max(1, ...rows.map(r => r.views));
+    box.innerHTML = `
+        <div style="display:flex;gap:.5rem;margin-bottom:.75rem">
+            ${[7, 14, 30].map(n => `<button class="btn ${n === days ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="renderAnnounceDaily(${n})">近 ${n} 天</button>`).join('')}
+        </div>
+        <table class="data-table">
+            <thead><tr><th>日期</th><th>阅读量</th><th>独立读者</th><th>站内</th><th>游戏内</th><th></th></tr></thead>
+            <tbody>${rows.map(r => `<tr>
+                <td class="text-tertiary">${esc(r.day)}</td>
+                <td style="font-weight:600">${r.views}</td>
+                <td>${r.readers}</td>
+                <td>${r.web}</td>
+                <td>${r.game}</td>
+                <td style="width:38%"><div style="height:6px;border-radius:3px;background:var(--color-bg-tertiary);overflow:hidden">
+                    <div style="height:100%;width:${Math.round(r.views / max * 100)}%;background:var(--color-accent)"></div></div></td>
+            </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--color-text-tertiary)">还没有阅读记录</td></tr>'}</tbody>
+        </table>
+        <p class="text-tertiary" style="font-size:.75rem;margin-top:.5rem">阅读量按「同一读者 30 分钟内重复打开只算一次」统计；游戏内那一列来自模组推送公告和 /公告 指令。</p>`;
+}
+
+async function renderAnnounceList() {
+    const box = document.getElementById('ann-list');
+    if (!box) return;
+    const { data, error } = await sb.rpc('admin_announcement_posts', { p_limit: 100 });
+    if (error) { box.innerHTML = `<div style="padding:1rem">${esc(errText(error, '读取失败'))}</div>`; return; }
+    box.innerHTML = `
+        <table class="data-table">
+            <thead><tr><th>标题</th><th>作者</th><th>分类</th><th>今日</th><th>近 7 天</th><th>累计</th><th>读者</th><th>游戏内</th><th>操作</th></tr></thead>
+            <tbody>${(data || []).map(p => `<tr>
+                <td><a href="#/announce/${p.id}" style="color:var(--color-accent)">${p.is_pinned ? '📌 ' : ''}${esc(p.title)}</a>
+                    ${p.status !== 'published' ? '<span class="badge badge-red">已隐藏</span>' : ''}</td>
+                <td class="text-tertiary">${esc(p.author || '')}<div style="font-size:.6875rem">${esc(p.qnid || '')}</div></td>
+                <td><span class="badge badge-gray">${esc(CAT_LABEL[p.category] || p.category)}</span></td>
+                <td style="font-weight:600">${p.today}</td>
+                <td>${p.week}</td>
+                <td>${p.total}</td>
+                <td>${p.readers}</td>
+                <td>${p.game}</td>
+                <td style="white-space:nowrap">
+                    <button class="btn btn-ghost btn-sm" onclick="editAnnounce('${p.id}')">编辑</button>
+                    <button class="btn btn-ghost btn-sm" onclick="adminTogglePost('${p.id}','${p.status}')">${p.status === 'published' ? '隐藏' : '恢复'}</button>
+                    <button class="btn btn-ghost btn-sm" onclick="adminTogglePin('${p.id}',${p.is_pinned ? 'false' : 'true'})">${p.is_pinned ? '取消置顶' : '置顶'}</button>
+                    <button class="btn btn-ghost btn-sm" onclick="adminDeletePost('${p.id}')">删除</button>
+                </td>
+            </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:var(--color-text-tertiary);padding:1.5rem">还没有公告</td></tr>'}</tbody>
+        </table>`;
+}
+
+// ==================== 后台：账号绑定管理 ====================
+// 需求里的「管理员可查看玩家真实绑定的游戏账号及对应绑定信息」就是这一页。
+// 数据全部来自服务端函数，anon key 直连读不到 game_bindings / qq_bindings。
+async function renderAdminBindings(el) {
+    el.innerHTML = `
+        <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">账号绑定</h2>
+        <div class="card mb-8">
+            <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">线下代绑 / 改绑</h3>
+            <p class="text-secondary" style="font-size:.8125rem;margin-bottom:.75rem">
+                玩家当面报上游戏账号、你核过身，可以直接建绑定，不用他再跑一遍校验码。填 QNID 或网站昵称都行。
+            </p>
+            <div class="grid-2">
+                <div class="form-group"><label class="form-label">QNID 或网站昵称</label>
+                    <input class="input" id="ab-target" placeholder="QN418392 或 qwen"></div>
+                <div class="form-group"><label class="form-label">游戏账号</label>
+                    <input class="input" id="ab-game" maxlength="16" placeholder="进服用的 ID"></div>
+            </div>
+            <label class="flex-center gap-4"><input id="ab-premium" type="checkbox"> 这个账号是正版</label>
+            <button class="btn btn-primary btn-sm" style="margin-top:.75rem" onclick="adminBindManual()">保存绑定</button>
+        </div>
+        <div class="card mb-8" id="ab-list">${loadingBlock()}</div>
+        <h3 style="font-size:1rem;font-weight:600;margin-bottom:var(--space-4)">QQ 绑定一览</h3>
+        <div class="card" id="ab-qq">${loadingBlock()}</div>`;
+    renderBindingList('');
+    renderQqList();
+}
+
+async function renderBindingList(kw) {
+    const box = document.getElementById('ab-list');
+    if (!box) return;
+    const { data, error } = await sb.rpc('admin_list_bindings', { p_keyword: kw || null, p_limit: 300 });
+    if (error) { box.innerHTML = `<div style="padding:1rem">${esc(errText(error, '读取失败'))}</div>`; return; }
+    const rows = data || [];
+    const bound = rows.filter(r => r.status === 'bound');
+    box.innerHTML = `
+        <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.75rem;flex-wrap:wrap">
+            <input class="input" id="ab-kw" placeholder="搜游戏账号 / QNID / 昵称" value="${esc(kw || '')}"
+                   style="max-width:260px" onkeydown="if(event.key==='Enter')renderBindingList(document.getElementById('ab-kw').value)">
+            <button class="btn btn-secondary btn-sm" onclick="renderBindingList(document.getElementById('ab-kw').value)">搜索</button>
+            <span class="badge badge-green">在绑 ${bound.length}</span>
+            <span class="badge badge-gray">含历史 ${rows.length}</span>
+        </div>
+        <table class="data-table">
+            <thead><tr><th>游戏账号</th><th>类型</th><th>QNID</th><th>网站昵称</th><th>QQ</th><th>来源</th><th>绑定时间</th><th>最近进服</th><th>操作</th></tr></thead>
+            <tbody>${rows.map(b => `<tr>
+                <td style="font-weight:600">${esc(b.game_username)}
+                    ${b.status !== 'bound' ? '<span class="badge badge-gray">已解绑</span>' : ''}</td>
+                <td><span class="badge ${b.premium ? 'badge-green' : 'badge-gray'}">${b.premium ? '正版' : '离线'}</span></td>
+                <td class="text-tertiary">${esc(b.qnid || '—')}</td>
+                <td>${esc(b.site_username || '')}</td>
+                <td class="text-tertiary">${esc(b.qq || '—')}</td>
+                <td class="text-tertiary">${b.source === 'admin' ? '后台代绑' : '校验码'}</td>
+                <td class="text-tertiary" style="font-size:.75rem">${b.bound_at ? new Date(b.bound_at).toLocaleString('zh-CN') : '—'}</td>
+                <td class="text-tertiary" style="font-size:.75rem">${b.last_seen_at ? timeAgo(b.last_seen_at) : '没进过服'}</td>
+                <td>${b.status === 'bound'
+                    ? `<button class="btn btn-ghost btn-sm" onclick="adminUnbindBinding('${b.id}','${esc(b.game_username)}')">解绑</button>`
+                    : '<span class="text-tertiary" style="font-size:.75rem">' + esc(b.note || '') + '</span>'}</td>
+            </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:var(--color-text-tertiary);padding:1.5rem">还没有任何绑定</td></tr>'}</tbody>
+        </table>`;
+}
+
+async function adminBindManual() {
+    const target = document.getElementById('ab-target').value.trim();
+    const game = document.getElementById('ab-game').value.trim();
+    const premium = document.getElementById('ab-premium').checked;
+    if (!target) return toast('请填写 QNID 或网站昵称', 'error');
+    if (!/^[A-Za-z0-9_]{2,16}$/.test(game)) return toast('游戏账号只能是 2-16 位字母、数字或下划线', 'error');
+    if (!confirm(`确认把游戏账号 ${game} 绑到 ${target}？`)) return;
+    const { data, error } = await sb.rpc('admin_bind_manually', { p_qnid: target, p_game_username: game, p_premium: premium });
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    if (!data || !data.ok) return toast((data && data.error) || '操作失败', 'error');
+    toast('绑定已保存');
+    document.getElementById('ab-target').value = '';
+    document.getElementById('ab-game').value = '';
+    renderBindingList('');
+}
+
+async function adminUnbindBinding(id, username) {
+    if (!confirm(`确定解绑 ${username}？解绑后这个账号进服会重新受时长限制。`)) return;
+    const { data, error } = await sb.rpc('qnid_unbind', { p_binding: id });
+    if (error) return toast(errText(error, '解绑失败'), 'error');
+    if (!data) return toast('这条绑定可能已经不存在了', 'error');
+    toast('已解绑');
+    const kw = (document.getElementById('ab-kw') || {}).value || '';
+    renderBindingList(kw);
+}
+
+async function renderQqList() {
+    const box = document.getElementById('ab-qq');
+    if (!box) return;
+    const { data, error } = await sb.rpc('admin_list_qq_bindings');
+    if (error) { box.innerHTML = `<div style="padding:1rem">${esc(errText(error, '读取失败'))}</div>`; return; }
+    const rows = data || [];
+    box.innerHTML = `
+        <table class="data-table">
+            <thead><tr><th>QQ 号</th><th>收件邮箱</th><th>QNID</th><th>网站昵称</th><th>已绑游戏账号</th><th>绑定时间</th></tr></thead>
+            <tbody>${rows.map(q => `<tr>
+                <td style="font-weight:600">${esc(q.qq)}</td>
+                <td class="text-tertiary">${esc(q.mail_to)}</td>
+                <td class="text-tertiary">${esc(q.qnid || '—')}</td>
+                <td>${esc(q.username || '')}</td>
+                <td>${(q.games || []).map(g => `<span class="badge ${g.premium ? 'badge-green' : 'badge-gray'}">${esc(g.game_username)}</span>`).join(' ') || '<span class="text-tertiary">—</span>'}</td>
+                <td class="text-tertiary" style="font-size:.75rem">${q.bound_at ? new Date(q.bound_at).toLocaleString('zh-CN') : '—'}</td>
+            </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--color-text-tertiary);padding:1.5rem">还没有人绑定 QQ</td></tr>'}</tbody>
+        </table>`;
+}
+
+// 公告的行内操作：状态、置顶、删除都刷新「公告发布」那一页的两张表
+function refreshAnnounceAdmin() {
+    renderAnnounceList();
+    renderAnnounceDaily(14);
+}
 async function adminTogglePost(pid, current) {
     const next = current === 'published' ? 'hidden' : 'published';
-    await sb.from('posts').update({ status: next }).eq('id', pid);
-    toast('状态已更新'); renderAdminPosts(document.getElementById('admin-content'));
+    const { error } = await sb.from('posts').update({ status: next, updated_at: new Date().toISOString() }).eq('id', pid);
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    toast('状态已更新'); refreshAnnounceAdmin();
 }
 async function adminTogglePin(pid, val) {
-    await sb.from('posts').update({ is_pinned: val }).eq('id', pid);
-    toast('操作成功'); renderAdminPosts(document.getElementById('admin-content'));
+    const { error } = await sb.from('posts').update({ is_pinned: val, updated_at: new Date().toISOString() }).eq('id', pid);
+    if (error) return toast(errText(error, '操作失败'), 'error');
+    toast(val ? '已置顶' : '已取消置顶'); refreshAnnounceAdmin();
 }
 async function adminDeletePost(pid) {
-    if (!confirm('确定删除该帖子？删除后社区不再显示。')) return;
-    const { error } = await sb.from('posts').update({ status: 'deleted' }).eq('id', pid);
+    if (!confirm('确定删除这条公告？删除后玩家端和列表里都不再显示（数据库记录保留）。')) return;
+    const { error } = await sb.from('posts').update({ status: 'deleted', updated_at: new Date().toISOString() }).eq('id', pid);
     if (error) return toast(errText(error, '删除失败'), 'error');
-    toast('帖子已删除'); renderAdminPosts(document.getElementById('admin-content'));
+    toast('已删除'); refreshAnnounceAdmin();
 }
 async function adminDeleteComment(cid) {
     if (!confirm('确定删除该评论？')) return;
@@ -2623,27 +2862,63 @@ async function reportAction(rid, action) {
     renderAdminReports(document.getElementById('admin-content'));
 }
 
-async function renderAdminAnnouncement(el) {
+// 这一页以前叫「公告管理」，写的是全站顶部那条横幅。现在真正的公告在「公告发布」那一页，
+// 这里改叫「顶部横幅与开关」，顺手把绑定/游戏内公告/未绑定限时这几个开关也收在同一处。
+async function renderAdminBanner(el) {
     const { data } = await sb.from('server_settings').select('value').eq('key','site').maybeSingle();
     const s = data?.value || {};
-    el.innerHTML = `<h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">公告管理</h2><div class="card">
-      <div class="form-group"><label class="form-label">公告内容</label><textarea class="textarea" id="ann-text" rows="4">${esc(s.announcement || '')}</textarea></div>
+    el.innerHTML = `<h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">顶部横幅</h2><div class="card mb-8">
+      <p class="text-tertiary" style="font-size:.75rem;margin-bottom:.75rem">这条只显示在每个页面顶部的横条，和「公告发布」里的公告是两套东西，别填重了。</p>
+      <div class="form-group"><label class="form-label">横幅内容</label><textarea class="textarea" id="ann-text" rows="4">${esc(s.announcement || '')}</textarea></div>
       <div class="form-group"><label class="form-label">详情链接（可选）</label><input class="input" id="ann-url" value="${esc(s.announcement_url || '')}"></div>
-      <label class="flex-center gap-4"><input id="ann-enabled" type="checkbox" ${s.announcement_enabled !== false ? 'checked' : ''}> 启用公告</label>
-      <div style="border-top:1px solid var(--color-border);margin-top:var(--space-6);padding-top:var(--space-5)">
+      <label class="flex-center gap-4"><input id="ann-enabled" type="checkbox" ${s.announcement_enabled !== false ? 'checked' : ''}> 启用横幅</label>
+      <button class="btn btn-primary" style="margin-top:1rem" onclick="saveBanner()">保存横幅</button></div>
+
+      <h2 style="font-size:1.25rem;font-weight:600;margin-bottom:var(--space-6)">功能开关</h2>
+      <div class="card">
+        <label class="flex-center gap-4"><input id="sw-qnid" type="checkbox" ${s.qnid_bind_enabled !== false ? 'checked' : ''}> 开放「账号绑定」页与游戏内 /QNID</label>
+        <p class="text-tertiary" style="font-size:.75rem;margin:.4rem 0 1rem;line-height:1.7">关掉之后玩家端「账号绑定」入口隐藏，模组那边也会停止要求绑定（已绑定的记录保留）。</p>
+
+        <label class="flex-center gap-4"><input id="sw-gameann" type="checkbox" ${s.game_announcement_enabled !== false ? 'checked' : ''}> 公告同步推送到游戏内</label>
+        <p class="text-tertiary" style="font-size:.75rem;margin:.4rem 0 1rem;line-height:1.7">玩家进服展示最新一条公告，并可用 /公告 查看列表；这些阅读会计入「公告发布」里的游戏内阅读量。</p>
+
+        <label class="flex-center gap-4"><input id="sw-qq" type="checkbox" ${s.qq_bind_enabled === true ? 'checked' : ''}> 开放 QQ 邮箱绑定</label>
+        <p class="text-tertiary" style="font-size:.75rem;margin:.4rem 0 1rem;line-height:1.7">这条依赖 Edge Function 的 <code>qq_bind</code> 发信动作。<strong>先部署 <code>backend/supabase/functions/ai/index.ts</code> 并配好 SMTP 密钥再打开</strong>，否则玩家点「发送验证码」只会报错。和邮件自助重置、邮箱验证码登录是同一套判断逻辑。</p>
+
+        <div class="grid-2" style="margin-top:var(--space-5)">
+          <div class="form-group"><label class="form-label">未绑定时正版每日可玩（分钟）</label>
+            <input class="input" id="sw-lim-premium" type="number" min="0" max="1440" value="${Number(s.qn_limit_premium_min != null ? s.qn_limit_premium_min : 120)}"></div>
+          <div class="form-group"><label class="form-label">未绑定时离线每日可玩（分钟）</label>
+            <input class="input" id="sw-lim-offline" type="number" min="0" max="1440" value="${Number(s.qn_limit_offline_min != null ? s.qn_limit_offline_min : 60)}"></div>
+        </div>
+        <p class="text-tertiary" style="font-size:.75rem;margin:.4rem 0 1rem;line-height:1.7">这两个数字模组每次有玩家进服时会重新读一次，改完不用重启服务器。填 0 表示未绑定者完全不能玩（注意这样会进不了服，也就打不了 /QNID，一般别填 0）。</p>
+
+        <div style="border-top:1px solid var(--color-border);margin-top:var(--space-5);padding-top:var(--space-5)">
         <label class="flex-center gap-4"><input id="ann-emailreset" type="checkbox" ${s.email_reset_enabled === true ? 'checked' : ''}> 开放「忘记密码」邮件自助重置</label>
         <p class="text-tertiary" style="font-size:.75rem;margin-top:.4rem;line-height:1.7">只有确认阿里云 SMTP 已经能正常收信之后再打开。没打开时，登录页的「忘记密码」走管理员后台重置。</p>
         <label class="flex-center gap-4" style="margin-top:var(--space-4)"><input id="ann-otplogin" type="checkbox" ${s.otp_login_enabled === true ? 'checked' : ''}> 开放「邮箱验证码」免密登录</label>
         <p class="text-tertiary" style="font-size:.75rem;margin-top:.4rem;line-height:1.7">打开后登录页多一个「用邮箱验证码登录」入口。前提同样是邮件能收到，并且 Supabase 的 Auth → Email Templates → <strong>Magic Link</strong> 模板里要有 <code>{{ .Token }}</code>，否则邮件只有链接没有码。</p>
-      </div>
-      <button class="btn btn-primary" style="margin-top:1rem" onclick="saveAnnouncement()">保存公告</button></div>`;
+        </div>
+      <button class="btn btn-primary" style="margin-top:1rem" onclick="saveBanner()">保存横幅与开关</button></div>`;
     draftBind('announcement', ['ann-text', 'ann-url', 'ann-enabled']);
 }
-async function saveAnnouncement() {
+async function saveBanner() {
     const { data } = await sb.from('server_settings').select('value').eq('key','site').maybeSingle();
-    const value = {...(data?.value || {}), announcement: document.getElementById('ann-text').value.trim(), announcement_url: document.getElementById('ann-url').value.trim(), announcement_enabled: document.getElementById('ann-enabled').checked, email_reset_enabled: document.getElementById('ann-emailreset').checked, otp_login_enabled: document.getElementById('ann-otplogin').checked};
+    const limP = parseInt(document.getElementById('sw-lim-premium').value, 10);
+    const limO = parseInt(document.getElementById('sw-lim-offline').value, 10);
+    const value = {...(data?.value || {}),
+        announcement: document.getElementById('ann-text').value.trim(),
+        announcement_url: document.getElementById('ann-url').value.trim(),
+        announcement_enabled: document.getElementById('ann-enabled').checked,
+        email_reset_enabled: document.getElementById('ann-emailreset').checked,
+        otp_login_enabled: document.getElementById('ann-otplogin').checked,
+        qnid_bind_enabled: document.getElementById('sw-qnid').checked,
+        game_announcement_enabled: document.getElementById('sw-gameann').checked,
+        qq_bind_enabled: document.getElementById('sw-qq').checked,
+        qn_limit_premium_min: Number.isFinite(limP) ? Math.max(0, Math.min(1440, limP)) : 120,
+        qn_limit_offline_min: Number.isFinite(limO) ? Math.max(0, Math.min(1440, limO)) : 60};
     const { error } = await sb.from('server_settings').upsert({key:'site', value, updated_at:new Date().toISOString()});
-    if (error) return toast(errText(error, '公告保存失败'), 'error'); Settings.cache = null; refreshAnnouncement(); draftClear('announcement'); toast('公告已保存');
+    if (error) return toast(errText(error, '保存失败'), 'error'); Settings.cache = null; refreshAnnouncement(); draftClear('announcement'); toast('已保存');
 }
 // ==================== 后台表单草稿（防止误刷新丢内容）====================
 function draftBind(key, ids) {
