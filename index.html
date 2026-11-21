@@ -209,10 +209,6 @@
         .power-task-card { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: var(--space-4) var(--space-5); }
         .power-task-reward { font-size: 1.125rem; font-weight: 700; color: var(--color-accent); white-space: nowrap; }
 
-        /* ==================== 文本强调（**词语** → 蓝底加粗） ==================== */
-        .md-hl { background: #dbeafe; color: #1e40af; padding: .05em .4em; border-radius: 4px; font-weight: 600; }
-        .disclaimer code { background: rgba(0,0,0,.06); padding: .1em .35em; border-radius: 3px; font-size: .9em; }
-
         /* ==================== 成员页 ==================== */
         .member-card { padding: var(--space-5); }
         .member-top { display: flex; align-items: center; gap: .75rem; }
@@ -348,28 +344,6 @@
         .auth-link a { color: var(--color-accent); }
         .auth-link a:hover { text-decoration: underline; }
 
-        /* 登录 / 注册 / 申请 / 验证：左侧表单，右侧主城实拍（窄屏隐藏图片） */
-        .auth-split { display: flex; align-items: center; justify-content: center; gap: var(--space-16); max-width: 1040px; margin: 0 auto; padding: 0 var(--space-6); }
-        .auth-split .auth-page { flex: 0 0 400px; max-width: none; margin: var(--space-16) 0; padding: 0; }
-        .auth-visual { flex: 0 1 420px; align-self: stretch; display: flex; }
-        .auth-visual img { width: 100%; min-height: 420px; max-height: 620px; object-fit: cover; object-position: 50% 38%; border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.18); }
-        @media (max-width: 1023px) {
-            .auth-split { display: block; }
-            .auth-split .auth-page { margin: var(--space-16) auto; max-width: 400px; }
-            .auth-visual { display: none; }
-        }
-
-        /* ==================== 个人中心 ==================== */
-        .pc-card-title { font-size: 1rem; font-weight: 600; margin-bottom: var(--space-5); }
-        .pc-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) 0; border-top: 1px solid var(--color-border); }
-        .pc-row:first-of-type { border-top: none; padding-top: 0; }
-        .pc-row-label { font-size: .8125rem; color: var(--color-text-tertiary); }
-        .pc-row-value { font-size: .9375rem; margin-top: .15rem; word-break: break-all; }
-        .grant-table { width: 100%; border-collapse: collapse; font-size: .875rem; }
-        .grant-table th { text-align: left; font-weight: 500; color: var(--color-text-tertiary); font-size: .75rem; padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-border); }
-        .grant-table td { padding: var(--space-4) var(--space-4) var(--space-4) 0; border-bottom: 1px solid var(--color-border); vertical-align: middle; }
-        .grant-table tr:last-child td { border-bottom: none; }
-
         /* ==================== Page: Profile ==================== */
         .profile-header { display: flex; align-items: center; gap: var(--space-6); margin-bottom: var(--space-8); }
         .profile-name { font-size: 1.5rem; font-weight: 600; }
@@ -504,7 +478,6 @@
             <a href="#/download" class="nav-link" data-route="/download">下载</a>
             <a href="#/members" class="nav-link" data-route="/members">成员</a>
             <a href="#/power" class="nav-link" data-route="/power">电力</a>
-            <a href="#/skill" class="nav-link" data-route="/skill">AI 技能</a>
             <a href="#/commands" class="nav-link" data-route="/commands">指令</a>
             <a href="#/events" class="nav-link" data-route="/events">活动</a>
             <a href="#/records" class="nav-link" data-route="/records">实录</a>
@@ -565,8 +538,8 @@
 
 <!-- Supabase SDK + 配置 + 应用逻辑 -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="config.js?v=20261023b"></script>
-<script src="app.js?v=20261023i"></script>
+<script src="config.js?v=20261121a"></script>
+<script src="app.js?v=20261023c"></script>
 
 </body>
 </html>
